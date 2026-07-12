@@ -1,0 +1,13 @@
+# Rust build artifacts
+/target
+/fuzz/target
+
+# Rustfmt backups
+**/*.rs.bk
+
+# Editor and OS files
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

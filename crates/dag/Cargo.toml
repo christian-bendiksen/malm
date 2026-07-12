@@ -1,0 +1,14 @@
+# SPDX-FileCopyrightText: 2023 AerynOS Developers
+# SPDX-License-Identifier: MPL-2.0
+
+[package]
+name = "dag"
+edition.workspace = true
+version.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+petgraph.workspace = true
+
+[lints]
+workspace = true
