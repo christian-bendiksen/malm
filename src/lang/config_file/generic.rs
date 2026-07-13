@@ -1,6 +1,6 @@
 //! Format-specific IRs and deterministic serializers for generic config files.
 
-use super::{ConfigItem, ConfigValue, Renderer, config_value, parse_items};
+use super::{ConfigItem, ConfigValue, Renderer, config_value, css_value, parse_items};
 use crate::lang::diag::{Diagnostic, FileId, Span, codes};
 use crate::lang::kdl_util::{
     ParseResult, entry_span, node_span, prop_entry, reject_unknown_children, reject_unknown_props,
@@ -222,14 +222,19 @@ fn node_name(file: FileId, node: &KdlNode) -> ParseResult<(String, usize)> {
     }
 }
 
-fn scalar_expr(file: FileId, node: &KdlNode, skip: usize) -> ParseResult<ScalarExpr> {
+fn scalar_expr(
+    file: FileId,
+    node: &KdlNode,
+    skip: usize,
+    parse_value: fn(FileId, &KdlEntry) -> ParseResult<ConfigValue>,
+) -> ParseResult<ScalarExpr> {
     reject_unknown_props(file, node, &["join"])?;
     reject_unknown_children(file, node, &[])?;
     let span = node_span(file, node);
     let values = positional(node)
         .into_iter()
         .skip(skip)
-        .map(|entry| config_value(file, entry))
+        .map(|entry| parse_value(file, entry))
         .collect::<ParseResult<Vec<_>>>()?;
     if values.is_empty() {
         return Err(Diagnostic::error(
@@ -303,7 +308,7 @@ fn parse_xml_element(
             }
             attrs.push((
                 attr_name,
-                scalar_expr(file, child, 1)?,
+                scalar_expr(file, child, 1, config_value)?,
                 node_span(file, child),
             ));
         } else {
@@ -322,7 +327,7 @@ fn parse_xml_node(file: FileId, node: &KdlNode) -> ParseResult<XmlNode> {
     let span = node_span(file, node);
     match node.name().value() {
         "value" => Ok(XmlNode::Text {
-            value: scalar_expr(file, node, 0)?,
+            value: scalar_expr(file, node, 0, config_value)?,
             span,
         }),
         "comment" => parse_comment(file, node).map(|text| XmlNode::Comment { text, span }),
@@ -381,7 +386,7 @@ fn parse_xml_node(file: FileId, node: &KdlNode) -> ParseResult<XmlNode> {
                         }
                         attrs.push((
                             attr_name,
-                            scalar_expr(file, child, 1)?,
+                            scalar_expr(file, child, 1, config_value)?,
                             node_span(file, child),
                         ));
                     } else {
@@ -430,7 +435,7 @@ fn parse_xml_node(file: FileId, node: &KdlNode) -> ParseResult<XmlNode> {
                 }
                 parse_xml_element(file, node, Some(name)).map(XmlNode::Element)
             } else {
-                let value = scalar_expr(file, node, skip)?;
+                let value = scalar_expr(file, node, skip, config_value)?;
                 Ok(XmlNode::Element(XmlElement {
                     name,
                     attrs: Vec::new(),
@@ -509,7 +514,7 @@ fn parse_css(file: FileId, node: &KdlNode) -> ParseResult<CssNode> {
                         .skip(1)
                         .map(|entry| {
                             Ok(ScalarExpr {
-                                values: vec![config_value(file, entry)?],
+                                values: vec![css_value(file, entry)?],
                                 join: String::new(),
                                 span: entry_span(file, entry),
                             })
@@ -548,7 +553,7 @@ fn parse_css(file: FileId, node: &KdlNode) -> ParseResult<CssNode> {
                 css_identifier(&name, span, "declaration name")?;
                 Ok(CssNode::Declaration {
                     name,
-                    value: scalar_expr(file, node, skip)?,
+                    value: scalar_expr(file, node, skip, css_value)?,
                     repeated: false,
                     span,
                 })

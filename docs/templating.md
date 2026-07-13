@@ -320,9 +320,15 @@ render ".config/app/theme.css" format="css" {
     }
     field ".window" {
         color (ref)"foreground"
+        border (f)"1px solid {{accent}}"
     }
 }
 ```
+
+CSS declaration values accept `(f)` when literal CSS text and typed values need
+to be composed. They use the same placeholders and codecs as other formatted
+values. Optional placeholders must be guarded with `when-set`, and the rendered
+value is still rejected if it introduces CSS declaration or block structure.
 
 Run `malm check` after changing one of these bodies. Their rules are stricter
 than the shared JSON, TOML, INI, text, and Lua structure.

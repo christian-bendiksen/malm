@@ -8,6 +8,7 @@ use crate::lang::kdl_util::{
     parse_range_header, parse_splice, reject_unknown_props,
 };
 use crate::lang::scope::Scope;
+use crate::lang::text::{self, TemplateSyntax};
 use crate::lang::value::Value;
 use kdl::{KdlEntry, KdlNode, KdlValue};
 
@@ -46,6 +47,7 @@ impl<T> ConfigItem<T> {
 pub enum ConfigValue {
     Literal(Value, Span),
     Ref(Ref),
+    FString { raw: String, span: Span },
 }
 
 impl ConfigValue {
@@ -53,6 +55,7 @@ impl ConfigValue {
         match self {
             Self::Literal(_, span) => *span,
             Self::Ref(reference) => reference.span,
+            Self::FString { span, .. } => *span,
         }
     }
 }
@@ -195,6 +198,31 @@ pub(super) fn config_value(file: FileId, entry: &KdlEntry) -> ParseResult<Config
         KdlValue::String(value) => Value::String(value.clone()),
     };
     Ok(ConfigValue::Literal(value, entry_span(file, entry)))
+}
+
+pub(super) fn css_value(file: FileId, entry: &KdlEntry) -> ParseResult<ConfigValue> {
+    let span = entry_span(file, entry);
+    match entry.ty().map(|ty| ty.value()) {
+        Some("f") => {
+            let raw = entry.value().as_string().ok_or_else(|| {
+                Diagnostic::error(codes::NODE_SHAPE, "an `(f)` CSS value must be a string")
+                    .with_span(span)
+            })?;
+            if let Err(message) = text::parse_template_with(raw, TemplateSyntax::V3) {
+                return Err(Diagnostic::error(codes::TEMPLATE, message).with_span(span));
+            }
+            Ok(ConfigValue::FString {
+                raw: raw.to_owned(),
+                span,
+            })
+        }
+        Some("ref") | None => config_value(file, entry),
+        Some(other) => Err(Diagnostic::error(
+            codes::NODE_SHAPE,
+            format!("unknown CSS value annotation `({other})` (allowed: ref, f)"),
+        )
+        .with_span(span)),
+    }
 }
 
 pub(crate) fn render(
@@ -464,6 +492,18 @@ impl Renderer<'_> {
                     );
                     None
                 })
+            }
+            ConfigValue::FString { raw, span } => {
+                let scope = &*self.scope;
+                let lookup = move |name: &str| scope.lookup(name).cloned();
+                match text::render_template_with(raw, TemplateSyntax::V3, &lookup) {
+                    Ok(rendered) => Some(Value::String(rendered)),
+                    Err(message) => {
+                        self.diagnostics
+                            .push(Diagnostic::error(codes::TEMPLATE, message).with_span(*span));
+                        None
+                    }
+                }
             }
         }
     }

@@ -63,6 +63,89 @@ profile "p" { use "m" }
 }
 
 #[test]
+fn css_fstrings_render_direct_and_repeated_declarations() {
+    let env = TestEnv::new();
+    env.write_config(
+        r##"config target="~" default-profile="p"
+module "m" {
+    inputs {
+        input "font" type="string" default="JetBrains Mono"
+        input "accent" type="string" default="#ffaa00"
+        input "delay" type="int" default=125
+        input "label" type="string" optional=#true default="ready"
+    }
+    outputs {
+        render "app.css" format="css" {
+            ".item" {
+                font-family (f)"'{{font}}', sans-serif"
+                border (f)"1px solid {{accent}}"
+                repeat "transition-delay" (f)"{{delay}}ms" (f)"calc({{delay}}ms + 100ms)"
+            }
+            when-set "label" {
+                ".label" { content (f)"'{{label}}'" }
+            }
+            range "step" from=1 through=2 {
+                repeat ".step" { z-index (f)"{{step}}" }
+            }
+        }
+    }
+}
+profile "p" { use "m" }
+"##,
+    );
+    env.apply_ok();
+    assert_eq!(
+        read_home(&env, "app.css"),
+        concat!(
+            ".item {\n",
+            "  font-family: 'JetBrains Mono', sans-serif;\n",
+            "  border: 1px solid #ffaa00;\n",
+            "  transition-delay: 125ms;\n",
+            "  transition-delay: calc(125ms + 100ms);\n",
+            "}\n",
+            ".label {\n",
+            "  content: 'ready';\n",
+            "}\n",
+            ".step {\n",
+            "  z-index: 1;\n",
+            "}\n",
+            ".step {\n",
+            "  z-index: 2;\n",
+            "}\n",
+        )
+    );
+}
+
+#[test]
+fn css_fstrings_are_typed_and_remain_css_only() {
+    for (input, expected) in [
+        (
+            r#"inputs { input "maybe" type="string" optional=#true }
+outputs { render "o.css" format="css" { ".item" { content (f)"{{maybe}}" } } }"#,
+            "does not accept optional<string>",
+        ),
+        (
+            r#"outputs { render "o.css" format="css" { ".item" { content (f)"{{missing}}" } } }"#,
+            "`missing` is not defined",
+        ),
+        (
+            r#"outputs { render "o.xml" format="xml" { root { child (f)"value" } } }"#,
+            "only the `(ref)` value type is allowed in config-file",
+        ),
+    ] {
+        let env = TestEnv::new();
+        env.write_config(&format!(
+            "config target=\"~\" default-profile=\"p\"\nmodule \"m\" {{ {input} }}\nprofile \"p\" {{ use \"m\" }}\n"
+        ));
+        let failure = env.fail(&["plan"]);
+        assert!(
+            failure.contains(expected),
+            "expected {expected}:\n{failure}"
+        );
+    }
+}
+
+#[test]
 fn removed_spellings_and_bad_render_options_fail_clearly() {
     for (output, expected) in [
         (
@@ -295,7 +378,7 @@ module "m" {
     inputs { input "css-value" type="string" default="red; background: url(bad)" }
     outputs {
         render "unsafe.css" format="css" {
-            ".item" { color (ref)"css-value" }
+            ".item" { color (f)"{{css-value}}" }
         }
     }
 }

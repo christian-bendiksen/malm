@@ -1044,6 +1044,10 @@ fn check_config_typed(
             (ty, reference.span)
         }
         ConfigValue::Literal(value, span) => (scalar_type_of_config(value), *span),
+        ConfigValue::FString { raw, span } => {
+            check_render_template(env, raw, *span, diagnostics);
+            (Type::String, *span)
+        }
     };
     if !accepts(&ty) {
         diagnostics.push(
