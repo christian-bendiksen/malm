@@ -2,6 +2,7 @@
 
 use crate::app::context::GlobalCtx;
 use crate::config::{ProfileSelection, load_remote_config};
+use crate::lang::text::shell_word;
 use crate::output::meta::print_loaded_source;
 use crate::output::{plan_to_json, print_policy_violations};
 use crate::planning::plan::DeploymentPlan;
@@ -62,7 +63,8 @@ pub fn run(ctx: &GlobalCtx, source: Option<String>, opts: PlanOpts) -> Result<i3
                 println!("  {} fetching {}...", "↓".cyan().bold(), clean_url);
             }
 
-            let loaded = load_remote_config(&url, reference, allow_local_includes)?;
+            let loaded =
+                load_remote_config(&url, reference, ctx.config.as_deref(), allow_local_includes)?;
             let selection = ProfileSelection::resolve(&loaded.config, ctx.profile.as_deref())?;
             selection.ensure_selectable(&loaded.config)?;
             if !ctx.json {
@@ -110,8 +112,13 @@ pub fn run(ctx: &GlobalCtx, source: Option<String>, opts: PlanOpts) -> Result<i3
                 } else {
                     ""
                 };
+                let config_flag = ctx
+                    .config
+                    .as_deref()
+                    .map(|path| format!(" --config {}", shell_word(&path.display().to_string())))
+                    .unwrap_or_default();
                 println!(
-                    "\n  {} apply this config:\n    malm apply {} {ref_flag} --trust-remote{local_flag}",
+                    "\n  {} apply this config:\n    malm apply {} {ref_flag} --trust-remote{local_flag}{config_flag}",
                     "→".cyan().bold(),
                     git::redact_url(&url),
                 );

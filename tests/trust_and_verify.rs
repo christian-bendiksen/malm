@@ -32,6 +32,23 @@ fn trust_remote_is_rejected_for_local_applies() {
 }
 
 #[test]
+fn remote_config_path_is_rejected_before_fetching() {
+    let env = TestEnv::new();
+    let output = env.fail(&[
+        "--config",
+        "../malm.kdl",
+        "plan",
+        "https://example.invalid/dots.git",
+        "--branch",
+        "main",
+    ]);
+    assert!(
+        output.contains("remote config path must not contain"),
+        "output:\n{output}"
+    );
+}
+
+#[test]
 fn checkout_verify_detects_a_corrupted_snapshot() {
     let env = TestEnv::with_basic_config();
     env.apply_ok();
@@ -94,16 +111,17 @@ fn failed_update_preserves_existing_tracking_bytes() {
 }
 
 #[test]
-fn source_less_remote_reapply_reconciles_commit_and_profile() {
+fn source_less_remote_reapply_reconciles_commit_profile_and_nested_config() {
     let env = TestEnv::new();
     env.write_repo_file("files/bashrc", "export TEST=1\n");
-    env.write_config(
+    env.write_repo_file(
+        "nested/malm.kdl",
         "config target=\"~\" default-profile=\"main\"\n\
          module \"basic\" { outputs { file \"files/bashrc\" to=\"~/.bashrc\" } }\n\
          profile \"main\" { use \"basic\" }\n\
          profile \"other\" { use \"basic\" }\n",
     );
-    env.apply_ok();
+    env.ok(&["--config", "nested/malm.kdl", "apply", "-y"]);
 
     let commit = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     let old_commit = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -137,6 +155,7 @@ fn source_less_remote_reapply_reconciles_commit_and_profile() {
         "applied_commit": old_commit,
         "applied_at": 1,
         "allow_local_includes": false,
+        "config": "nested/malm.kdl",
         "profile": "main",
     });
     std::fs::write(
@@ -155,6 +174,7 @@ fn source_less_remote_reapply_reconciles_commit_and_profile() {
     let reconciled: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&tracking_path).unwrap()).unwrap();
     assert_eq!(reconciled["applied_commit"], commit);
+    assert_eq!(reconciled["config"], "nested/malm.kdl");
     assert_eq!(reconciled["profile"], "main");
 
     let output = env.malm_without_repo(&["apply", "-y", "--profile", "other"]);
@@ -165,7 +185,23 @@ fn source_less_remote_reapply_reconciles_commit_and_profile() {
         String::from_utf8_lossy(&output.stderr)
     );
     assert!(
-        !tracking_path.exists(),
-        "tracking must be removed when the effective profile changes"
+        tracking_path.exists(),
+        "source-less profile changes should preserve tracking"
     );
+    let reconciled: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&tracking_path).unwrap()).unwrap();
+    assert_eq!(reconciled["config"], "nested/malm.kdl");
+    assert_eq!(reconciled["profile"], "other");
+
+    let output = env.malm_without_repo(&["apply", "-y"]);
+    assert!(
+        output.status.success(),
+        "second source-less reapply failed:\n{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let reconciled: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&tracking_path).unwrap()).unwrap();
+    assert_eq!(reconciled["config"], "nested/malm.kdl");
+    assert_eq!(reconciled["profile"], "other");
 }

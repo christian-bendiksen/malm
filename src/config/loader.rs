@@ -3,7 +3,9 @@
 //! local includes without permission.
 
 use crate::app::context::GlobalCtx;
-use crate::config::discovery::{local_config_path, remote_config_path};
+use crate::config::discovery::{
+    local_config_path, remote_config_path, validate_remote_config_relative,
+};
 use crate::config::kdl::{
     bool_prop, expect_arg_count, opt_str_prop, reject_unknown_children, reject_unknown_props,
     req_str_arg, req_str_prop,
@@ -65,6 +67,26 @@ pub struct LoadedConfigSource {
     pub allow_local_includes: bool,
 }
 
+impl LoadedConfigSource {
+    pub(crate) fn relative_config_path(&self) -> Result<PathBuf> {
+        self.config_path
+            .strip_prefix(&self.resolved.source_root)
+            .map(Path::to_path_buf)
+            .with_context(|| {
+                format!(
+                    "config {} is outside source root {}",
+                    self.config_path.display(),
+                    self.resolved.source_root.display()
+                )
+            })
+    }
+
+    pub(crate) fn tracked_config_path(&self) -> Result<Option<PathBuf>> {
+        let relative = self.relative_config_path()?;
+        Ok((relative != Path::new("malm.kdl")).then_some(relative))
+    }
+}
+
 pub fn load_local_config(ctx: &GlobalCtx) -> Result<LoadedConfigSource> {
     let raw_config = ctx.config.clone();
     let raw_repo = ctx.repo.clone().unwrap_or_else(|| {
@@ -97,15 +119,19 @@ pub(crate) fn local_config_candidate(ctx: &GlobalCtx) -> Option<PathBuf> {
 pub fn load_remote_config(
     url: &str,
     reference: GitReference,
+    config: Option<&Path>,
     read_external_includes: bool,
 ) -> Result<LoadedConfigSource> {
     require_https(url)?;
+    if let Some(config) = config {
+        validate_remote_config_relative(config)?;
+    }
     let resolved = SourceSpec::Git {
         url: url.to_owned(),
         reference,
     }
     .resolve()?;
-    let config_path = remote_config_path(&resolved.source_root)?;
+    let config_path = remote_config_path(&resolved.source_root, config)?;
     parse_loaded(resolved, config_path, read_external_includes)
 }
 

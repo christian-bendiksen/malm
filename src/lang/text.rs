@@ -222,7 +222,7 @@ fn toml_string(s: &str) -> String {
 }
 
 /// Quote a string as one POSIX shell word (single-quote strategy).
-fn shell_word(s: &str) -> String {
+pub(crate) fn shell_word(s: &str) -> String {
     if !s.is_empty()
         && s.chars().all(|c| {
             c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.' | '/' | ':' | '=' | '+' | ',')

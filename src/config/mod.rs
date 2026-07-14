@@ -7,6 +7,7 @@ pub(crate) mod loader;
 mod model;
 mod profile;
 
+pub(crate) use discovery::validate_remote_config_relative;
 pub use loader::{ConfigFileKind, ConfigFileProvenance};
 pub(crate) use loader::{
     LoadedConfigSource, load_local_config, load_remote_config, load_snapshot_config,

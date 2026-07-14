@@ -172,6 +172,17 @@ malm apply https://example.com/user/dotfiles.git \
 A remote apply requires `--trust-remote` and one of `--commit`, `--tag`, or
 `--branch`. An exact commit is the easiest option to review and reproduce.
 
+`--config` also selects a repository-relative entry point for remote sources:
+
+```sh
+malm --config hosts/laptop.kdl \
+    plan https://example.com/user/dotfiles.git --branch main
+```
+
+Remote config paths cannot be absolute, contain `.` or `..`, use `~`, or pass
+through symlinks. A tracked branch remembers its config path for source-less
+applies and updates.
+
 To follow a branch:
 
 ```sh

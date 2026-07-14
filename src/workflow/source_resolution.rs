@@ -121,6 +121,11 @@ pub(crate) fn load_from_manifest(
                      re-apply the source with --allow-local-includes to grant it"
                 );
             }
+            // Keep the recorded repository and config rooted in the same
+            // durable snapshot so another source-less replay can recover the
+            // nested config path.
+            repo = snapshot.repository().to_path_buf();
+            active_ctx.repo = Some(repo.clone());
             loaded
         }
         _ => load_local_config(active_ctx)?,

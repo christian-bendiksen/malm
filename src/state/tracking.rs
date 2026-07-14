@@ -2,6 +2,7 @@
 //! tracking when the applied source diverges.
 
 use crate::app::validation::validate_resolved_commit_sha;
+use crate::config::validate_remote_config_relative;
 use crate::fs::atomic;
 use crate::paths::xdg_state_home;
 use crate::source::git::{require_https, validate_branch_name};
@@ -26,6 +27,9 @@ pub struct TrackedRemote {
     /// not explicitly approved. Records without the field default to `false`.
     #[serde(default)]
     pub allow_local_includes: bool,
+    /// Repository-relative config entry point. `None` means root `malm.kdl`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<PathBuf>,
     /// Selected profile after resolving the config default.
     pub profile: Option<String>,
 }
@@ -39,6 +43,7 @@ impl TrackedRemote {
         branch: String,
         applied_commit: String,
         allow_local_includes: bool,
+        config: Option<PathBuf>,
         profile: Option<String>,
     ) -> Self {
         Self {
@@ -48,6 +53,7 @@ impl TrackedRemote {
             applied_commit,
             applied_at: now_unix(),
             allow_local_includes,
+            config,
             profile,
         }
     }
@@ -116,15 +122,29 @@ impl TrackedRemote {
             return Ok(());
         };
 
-        Self::reconcile_with_source(state_namespace, source, manifest.profile.as_deref())
+        let config = manifest_config_path(&manifest);
+        Self::reconcile_with_source(
+            state_namespace,
+            source,
+            config.as_deref(),
+            manifest.profile.as_deref(),
+        )
     }
 
     pub fn reconcile_with_source(
         state_namespace: &str,
         source: &SourceIdentity,
+        applied_config: Option<&std::path::Path>,
         applied_profile: Option<&str>,
     ) -> Result<()> {
-        Self::reconcile_with_applied(state_namespace, source, None, applied_profile)
+        Self::reconcile(
+            state_namespace,
+            source,
+            None,
+            applied_config,
+            applied_profile,
+            true,
+        )
     }
 
     // Remove tracking rather than repairing an untrusted record: unreadable or
@@ -133,7 +153,26 @@ impl TrackedRemote {
         state_namespace: &str,
         source: &SourceIdentity,
         applied_branch: Option<&str>,
+        applied_config: Option<&std::path::Path>,
         applied_profile: Option<&str>,
+    ) -> Result<()> {
+        Self::reconcile(
+            state_namespace,
+            source,
+            applied_branch,
+            applied_config,
+            applied_profile,
+            false,
+        )
+    }
+
+    fn reconcile(
+        state_namespace: &str,
+        source: &SourceIdentity,
+        applied_branch: Option<&str>,
+        applied_config: Option<&std::path::Path>,
+        applied_profile: Option<&str>,
+        allow_profile_change: bool,
     ) -> Result<()> {
         match &source.kind {
             SourceKind::Git { url, commit } => {
@@ -152,6 +191,13 @@ impl TrackedRemote {
                 let invalid = validate_branch_name(&tracking.branch)
                     .and_then(|()| require_https(&tracking.url))
                     .and_then(|()| validate_resolved_commit_sha(&tracking.applied_commit))
+                    .and_then(|()| {
+                        tracking
+                            .config
+                            .as_deref()
+                            .map(validate_remote_config_relative)
+                            .unwrap_or(Ok(()))
+                    })
                     .err();
                 if let Some(error) = invalid {
                     crate::warn_term!(
@@ -163,12 +209,23 @@ impl TrackedRemote {
                 if tracking.url != *url {
                     return Self::delete_for_state(state_namespace);
                 }
-                if tracking.profile.as_deref() != applied_profile {
+                if tracking.config.as_deref() != applied_config {
                     crate::warn_term!(
-                        "note: applied profile differs from the tracked profile; tracking removed; \
-                         re-apply with --track to follow this profile"
+                        "note: applied config differs from the tracked config; tracking removed; \
+                         re-apply with --track to follow this config"
                     );
                     return Self::delete_for_state(state_namespace);
+                }
+                if tracking.profile.as_deref() != applied_profile {
+                    if allow_profile_change {
+                        tracking.profile = applied_profile.map(str::to_owned);
+                    } else {
+                        crate::warn_term!(
+                            "note: applied profile differs from the tracked profile; tracking removed; \
+                             re-apply with --track to follow this profile"
+                        );
+                        return Self::delete_for_state(state_namespace);
+                    }
                 }
                 if let Some(branch) = applied_branch
                     && branch != tracking.branch
@@ -193,6 +250,15 @@ impl TrackedRemote {
 
         Ok(())
     }
+}
+
+fn manifest_config_path(
+    manifest: &crate::state::transaction::TransactionManifest,
+) -> Option<PathBuf> {
+    let repo = manifest.repo.as_deref()?;
+    let config = manifest.config.as_deref()?;
+    let relative = config.strip_prefix(repo).ok()?.to_path_buf();
+    (relative != std::path::Path::new("malm.kdl")).then_some(relative)
 }
 
 fn now_unix() -> u64 {
@@ -225,11 +291,16 @@ mod tests {
             "main".to_owned(),
             "0123456789abcdef0123456789abcdef01234567".to_owned(),
             true,
+            Some(PathBuf::from("nested/malm.kdl")),
             Some("desktop".to_owned()),
         );
         let json = serde_json::to_string(&tracking).expect("serialize tracking");
         let parsed: TrackedRemote = serde_json::from_str(&json).expect("parse tracking");
         assert!(parsed.allow_local_includes);
+        assert_eq!(
+            parsed.config.as_deref(),
+            Some(std::path::Path::new("nested/malm.kdl"))
+        );
         assert_eq!(parsed.profile.as_deref(), Some("desktop"));
         assert_eq!(parsed.version, TRACKING_VERSION);
     }

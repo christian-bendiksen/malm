@@ -82,7 +82,12 @@ pub fn run(
     // again here. A remote cannot gain local access by adding an include.
     let local_includes_granted = tracking.allow_local_includes || allow_local_includes;
     let reference = GitReference::Commit(latest_commit.clone());
-    let loaded = load_remote_config(&tracking.url, reference, local_includes_granted)?;
+    let loaded = load_remote_config(
+        &tracking.url,
+        reference,
+        tracking.config.as_deref(),
+        local_includes_granted,
+    )?;
     reject_ungranted_local_includes(&loaded.external_includes_skipped)?;
 
     // Keep the effective profile selected when tracking began. Changing the
@@ -104,6 +109,7 @@ pub fn run(
         tracking.branch.clone(),
         latest_commit.clone(),
         local_includes_granted,
+        tracking.config.clone(),
         tracking.profile.clone(),
     );
 

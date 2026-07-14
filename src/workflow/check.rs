@@ -45,7 +45,7 @@ pub fn run(
                 (None, None, None) => GitReference::DefaultBranch,
                 _ => anyhow::bail!("specify at most one of --branch, --tag, or --commit"),
             };
-            let loaded = load_remote_config(&url, reference, false)?;
+            let loaded = load_remote_config(&url, reference, ctx.config.as_deref(), false)?;
             if opts.all_profiles || opts.module.is_some() {
                 return check_workspace_wide(ctx, &loaded, allow, &opts);
             }

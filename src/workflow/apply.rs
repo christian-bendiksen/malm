@@ -4,6 +4,7 @@
 use crate::app::context::GlobalCtx;
 use crate::app::prompt::confirm;
 use crate::config::{LoadedConfigSource, ProfileSelection, load_local_config, load_remote_config};
+use crate::lang::text::shell_word;
 use crate::output::display::format_short_path;
 use crate::output::meta::print_loaded_source;
 use crate::policy::RemotePolicyOverrides;
@@ -119,6 +120,7 @@ fn dispatch(
                         source_resolution::load_from_manifest(&mut active_ctx, &manifest)?;
                     ensure_selectable_profile(&active_ctx, &loaded)?;
                     let applied_source = loaded.resolved.identity.clone();
+                    let applied_config = loaded.tracked_config_path()?;
 
                     if !active_ctx.json {
                         print_loaded_source(&loaded);
@@ -134,6 +136,7 @@ fn dispatch(
                     TrackedRemote::reconcile_with_source(
                         ctx.state_namespace.as_str(),
                         &applied_source,
+                        applied_config.as_deref(),
                         effective_profile.as_deref(),
                     )
                     .context("reconcile tracking state after active re-apply")?;
@@ -217,6 +220,7 @@ fn run_local(ctx: &GlobalCtx, yes: bool) -> Result<()> {
     TrackedRemote::reconcile_with_source(
         ctx.state_namespace.as_str(),
         &applied_source,
+        None,
         effective_profile.as_deref(),
     )
     .context("reconcile tracking state after local apply")?;
@@ -269,7 +273,12 @@ fn run_remote(
         anyhow::bail!("--track requires --branch (cannot track an exact commit)");
     }
 
-    let loaded = load_remote_config(url, reference, opts.allow_local_includes)?;
+    let loaded = load_remote_config(
+        url,
+        reference,
+        ctx.config.as_deref(),
+        opts.allow_local_includes,
+    )?;
     if !loaded.external_includes_skipped.is_empty() {
         let paths = loaded
             .external_includes_skipped
@@ -278,14 +287,20 @@ fn run_remote(
             .collect::<Vec<_>>()
             .join("\n");
         let track_flag = if opts.track { " --track" } else { "" };
+        let config_flag = ctx
+            .config
+            .as_deref()
+            .map(|path| format!(" --config {}", shell_word(&path.display().to_string())))
+            .unwrap_or_default();
         anyhow::bail!(
             "the remote config requests local includes:\n{paths}\n\
              re-run with --allow-local-includes to let it read them:\n  \
-             malm apply {url} {ref_flag} --trust-remote{track_flag} --allow-local-includes",
+             malm apply {url} {ref_flag} --trust-remote{track_flag} --allow-local-includes{config_flag}",
             url = redact_url(url)
         );
     }
     ensure_selectable_profile(ctx, &loaded)?;
+    let tracked_config = loaded.tracked_config_path()?;
     if !ctx.json {
         print_loaded_source(&loaded);
     }
@@ -309,6 +324,7 @@ fn run_remote(
             branch.clone(),
             resolved_commit,
             opts.allow_local_includes,
+            tracked_config,
             effective_profile,
         );
         state
@@ -320,6 +336,7 @@ fn run_remote(
             ctx.state_namespace.as_str(),
             &applied_source,
             branch_name.as_deref(),
+            tracked_config.as_deref(),
             effective_profile.as_deref(),
         )
         .context("reconcile tracking state after remote apply")?;
