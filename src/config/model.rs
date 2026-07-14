@@ -1,6 +1,7 @@
 //! Loaded configuration, including root settings, assets, and resolved language data.
 
 use crate::assets::AssetManifest;
+use crate::domain::id::StateName;
 use crate::lang::diag::SourceMap;
 use crate::lang::resolve::ResolvedWorkspace;
 
@@ -23,6 +24,7 @@ impl Config {
             settings: ConfigSettings {
                 target: "~".to_owned(),
                 default_profile: None,
+                required_state: None,
             },
             meta: None,
             warnings: Vec::new(),
@@ -52,6 +54,7 @@ pub struct MetaSection {
 pub struct ConfigSettings {
     pub target: String,
     pub default_profile: Option<String>,
+    pub required_state: Option<StateName>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

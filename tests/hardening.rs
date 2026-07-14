@@ -81,6 +81,21 @@ fn first_apply_creates_a_private_state_root() {
 }
 
 #[test]
+fn first_apply_initializes_a_store_after_remote_sources_are_cached() {
+    let env = TestEnv::with_basic_config();
+    let cache = env.state_root().join("cache/git/repository.git");
+    let source = env.state_root().join("sources/git/repository/commit");
+    std::fs::create_dir_all(&cache).unwrap();
+    std::fs::create_dir_all(&source).unwrap();
+    std::fs::write(cache.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+    std::fs::write(source.join("malm.kdl"), "config target=\"~\"\n").unwrap();
+
+    env.apply_ok();
+
+    assert!(env.state_root().join("format.json").is_file());
+}
+
+#[test]
 fn legacy_store_without_format_marker_is_rejected_with_reset_guidance() {
     let env = TestEnv::with_basic_config();
     env.apply_ok();

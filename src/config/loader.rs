@@ -11,6 +11,7 @@ use crate::config::kdl::{
     req_str_arg, req_str_prop,
 };
 use crate::config::{Config, ConfigSettings, MetaSection};
+use crate::domain::id::StateName;
 use crate::lang::ast::ParsedWorkspace;
 use crate::lang::diag::{Diagnostics, FileId, Severity, SourceMap};
 use crate::lang::parse::{
@@ -68,6 +69,19 @@ pub struct LoadedConfigSource {
 }
 
 impl LoadedConfigSource {
+    fn ensure_state_namespace(&self, state_namespace: &StateName) -> Result<()> {
+        let Some(required) = self.config.settings.required_state.as_ref() else {
+            return Ok(());
+        };
+        if required != state_namespace {
+            anyhow::bail!(
+                "config requires Malm state '{required}', but the command selected \
+                 '{state_namespace}'; re-run with `--state {required}`"
+            );
+        }
+        Ok(())
+    }
+
     pub(crate) fn relative_config_path(&self) -> Result<PathBuf> {
         self.config_path
             .strip_prefix(&self.resolved.source_root)
@@ -99,7 +113,9 @@ pub fn load_local_config(ctx: &GlobalCtx) -> Result<LoadedConfigSource> {
     });
     let resolved = SourceSpec::local(raw_repo).resolve()?;
     let config_path = local_config_path(&resolved.source_root, raw_config);
-    parse_loaded(resolved, config_path, true)
+    let loaded = parse_loaded(resolved, config_path, true)?;
+    loaded.ensure_state_namespace(&ctx.state_namespace)?;
+    Ok(loaded)
 }
 
 pub(crate) fn local_config_candidate(ctx: &GlobalCtx) -> Option<PathBuf> {
@@ -120,6 +136,7 @@ pub fn load_remote_config(
     url: &str,
     reference: GitReference,
     config: Option<&Path>,
+    state_namespace: &StateName,
     read_external_includes: bool,
 ) -> Result<LoadedConfigSource> {
     require_https(url)?;
@@ -132,16 +149,19 @@ pub fn load_remote_config(
     }
     .resolve()?;
     let config_path = remote_config_path(&resolved.source_root, config)?;
-    parse_loaded(resolved, config_path, read_external_includes)
+    let loaded = parse_loaded(resolved, config_path, read_external_includes)?;
+    loaded.ensure_state_namespace(state_namespace)?;
+    Ok(loaded)
 }
 
 pub(crate) fn load_snapshot_config(
     source_root: PathBuf,
     config_path: PathBuf,
     identity: SourceIdentity,
+    state_namespace: &StateName,
     allow_local_includes: bool,
 ) -> Result<LoadedConfigSource> {
-    parse_loaded(
+    let loaded = parse_loaded(
         ResolvedSource {
             source_root,
             identity,
@@ -149,7 +169,9 @@ pub(crate) fn load_snapshot_config(
         },
         config_path,
         allow_local_includes,
-    )
+    )?;
+    loaded.ensure_state_namespace(state_namespace)?;
+    Ok(loaded)
 }
 
 /// Reload a mutating operation from its private source capture before planning.
@@ -448,12 +470,16 @@ impl IncludeLoader {
                 if self.root.settings.is_some() {
                     anyhow::bail!("malm.kdl: duplicate `config` node");
                 }
-                reject_unknown_props(node, &["target", "default-profile"])?;
+                reject_unknown_props(node, &["target", "default-profile", "required-state"])?;
                 reject_unknown_children(node, &[])?;
                 expect_arg_count(node, 0)?;
                 self.root.settings = Some(ConfigSettings {
                     target: req_str_prop(node, "target")?,
                     default_profile: opt_str_prop(node, "default-profile")?,
+                    required_state: opt_str_prop(node, "required-state")?
+                        .map(StateName::new)
+                        .transpose()
+                        .context("malm.kdl: invalid `required-state`")?,
                 });
             }
             "meta" => {

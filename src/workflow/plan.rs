@@ -10,6 +10,7 @@ use crate::policy::{PolicyFinding, RemotePolicyOverrides};
 use crate::source::{GitReference, SourceKind, git};
 use crate::workflow::pipeline::DeploymentPipeline;
 use crate::workflow::source_resolution::load_resolved_local;
+use crate::workflow::state_cli_flag;
 use anyhow::Result;
 use owo_colors::OwoColorize;
 
@@ -63,8 +64,13 @@ pub fn run(ctx: &GlobalCtx, source: Option<String>, opts: PlanOpts) -> Result<i3
                 println!("  {} fetching {}...", "↓".cyan().bold(), clean_url);
             }
 
-            let loaded =
-                load_remote_config(&url, reference, ctx.config.as_deref(), allow_local_includes)?;
+            let loaded = load_remote_config(
+                &url,
+                reference,
+                ctx.config.as_deref(),
+                &ctx.state_namespace,
+                allow_local_includes,
+            )?;
             let selection = ProfileSelection::resolve(&loaded.config, ctx.profile.as_deref())?;
             selection.ensure_selectable(&loaded.config)?;
             if !ctx.json {
@@ -117,8 +123,9 @@ pub fn run(ctx: &GlobalCtx, source: Option<String>, opts: PlanOpts) -> Result<i3
                     .as_deref()
                     .map(|path| format!(" --config {}", shell_word(&path.display().to_string())))
                     .unwrap_or_default();
+                let state_flag = state_cli_flag(&ctx.state_namespace);
                 println!(
-                    "\n  {} apply this config:\n    malm apply {} {ref_flag} --trust-remote{local_flag}{config_flag}",
+                    "\n  {} apply this config:\n    malm apply {} {ref_flag} --trust-remote{local_flag}{state_flag}{config_flag}",
                     "→".cyan().bold(),
                     git::redact_url(&url),
                 );

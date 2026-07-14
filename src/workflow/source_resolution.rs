@@ -104,6 +104,7 @@ pub(crate) fn load_from_manifest(
                 snapshot.repository().to_path_buf(),
                 snapshot.repository().join(config_relative),
                 manifest.source.clone().expect("matched Git source"),
+                &active_ctx.state_namespace,
                 grant,
             )?;
             // Fail closed: silently dropping includes would change the plan

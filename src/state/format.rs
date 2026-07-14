@@ -88,6 +88,9 @@ fn has_legacy_data(root: &Path) -> Result<bool> {
         if name == "targets.lock" {
             continue;
         }
+        if matches!(name.to_str(), Some("cache" | "sources")) && entry.file_type()?.is_dir() {
+            continue;
+        }
         if matches!(name.to_str(), Some("states" | "objects" | "transactions"))
             && entry.file_type()?.is_dir()
             && std::fs::read_dir(entry.path())?.next().is_none()
@@ -129,5 +132,28 @@ mod tests {
         assert!(message.contains("Legacy state is not migrated"));
         assert!(message.contains("move"));
         assert!(message.contains("malm apply"));
+    }
+
+    #[test]
+    fn fetched_sources_do_not_make_an_unmarked_store_legacy() {
+        let root = tempfile::tempdir().unwrap();
+        let cache = root.path().join("cache/git/repository.git");
+        let source = root.path().join("sources/git/repository/commit");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(cache.join("HEAD"), "ref: refs/heads/main\n").unwrap();
+        std::fs::write(source.join("malm.kdl"), "config target=\"~\"\n").unwrap();
+
+        assert!(!has_legacy_data(root.path()).unwrap());
+    }
+
+    #[test]
+    fn authoritative_records_still_make_an_unmarked_store_legacy() {
+        let root = tempfile::tempdir().unwrap();
+        let state = root.path().join("states/default");
+        std::fs::create_dir_all(&state).unwrap();
+        std::fs::write(state.join("state.json"), "{}").unwrap();
+
+        assert!(has_legacy_data(root.path()).unwrap());
     }
 }

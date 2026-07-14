@@ -52,7 +52,12 @@ fn tree_blob_index_path(object_id: &str) -> Result<PathBuf> {
 }
 
 pub fn record_tree_blobs(object_id: &str, blobs: &[String]) -> Result<()> {
-    let path = tree_blob_index_path(object_id)?;
+    record_tree_blobs_in(&tree_blob_index_dir(), object_id, blobs)
+}
+
+fn record_tree_blobs_in(index_dir: &Path, object_id: &str, blobs: &[String]) -> Result<()> {
+    validate_object_id(object_id)?;
+    let path = index_dir.join(format!("{object_id}.json"));
     let json = serde_json::to_string(blobs).context("serialize tree blob index")?;
     atomic::write(&path, json).with_context(|| format!("write {}", path.display()))
 }
@@ -330,10 +335,20 @@ pub fn store_blob(src_file: &Path, dest_object: &Path) -> Result<()> {
 }
 
 pub fn store_tree(src_dir: &Path, dest_object_dir: &Path) -> Result<()> {
-    store_tree_with_blobs(src_dir, dest_object_dir, &blobs_dir())
+    store_tree_with_blobs(
+        src_dir,
+        dest_object_dir,
+        &blobs_dir(),
+        &tree_blob_index_dir(),
+    )
 }
 
-fn store_tree_with_blobs(src_dir: &Path, dest_object_dir: &Path, blobs: &Path) -> Result<()> {
+fn store_tree_with_blobs(
+    src_dir: &Path,
+    dest_object_dir: &Path,
+    blobs: &Path,
+    tree_blob_index: &Path,
+) -> Result<()> {
     if existing_object(dest_object_dir, true)? {
         return Ok(());
     }
@@ -355,7 +370,7 @@ fn store_tree_with_blobs(src_dir: &Path, dest_object_dir: &Path, blobs: &Path) -
         Ok(()) => {
             if let Some(id) = dest_object_dir.file_name().and_then(|name| name.to_str()) {
                 // Record the index only after the tree has been placed.
-                record_tree_blobs(id, &tree_blobs)
+                record_tree_blobs_in(tree_blob_index, id, &tree_blobs)
                     .with_context(|| format!("record tree blobs for {id}"))?;
             }
             Ok(())
@@ -717,8 +732,9 @@ mod tests {
         let hash = tree_hash(&source).unwrap();
         let object = tmp.path().join(&hash);
         let blobs = tmp.path().join("blobs");
+        let tree_blob_index = tmp.path().join("tree-blobs");
 
-        store_tree_with_blobs(&source, &object, &blobs).unwrap();
+        store_tree_with_blobs(&source, &object, &blobs, &tree_blob_index).unwrap();
 
         let mode = fs::metadata(object.join("script"))
             .unwrap()

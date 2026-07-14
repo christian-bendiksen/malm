@@ -221,6 +221,16 @@ malm --state laptop --repo . apply
 malm --state laptop status
 ```
 
+A configuration can require an exact state namespace to prevent accidental
+cross-state ownership:
+
+```kdl
+config target="~" required-state="laptop"
+```
+
+Commands selecting another namespace fail with an actionable `--state laptop`
+suggestion. Omitting `required-state` preserves the default behavior.
+
 If a deployment is interrupted, Malm blocks further mutations until recovery
 has handled the unfinished transaction.
 

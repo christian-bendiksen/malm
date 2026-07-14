@@ -86,6 +86,7 @@ pub fn run(
         &tracking.url,
         reference,
         tracking.config.as_deref(),
+        &ctx.state_namespace,
         local_includes_granted,
     )?;
     reject_ungranted_local_includes(&loaded.external_includes_skipped)?;

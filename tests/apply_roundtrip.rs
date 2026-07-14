@@ -28,6 +28,36 @@ fn apply_deploys_symlink_and_records_transaction() {
 }
 
 #[test]
+fn config_required_state_rejects_the_wrong_namespace() {
+    let env = TestEnv::new();
+    env.write_config(
+        "config target=\"~\" default-profile=\"main\" required-state=\"protected\"\n\
+         module \"basic\" { outputs { render \"basic.conf\" format=\"text\" { @line \"ok\" } } }\n\
+         profile \"main\" { use \"basic\" }\n",
+    );
+
+    env.ok(&["--state", "protected", "check"]);
+    let output = env.fail(&["check"]);
+    assert!(
+        output.contains("config requires Malm state 'protected'")
+            && output.contains("--state protected"),
+        "output:\n{output}"
+    );
+}
+
+#[test]
+fn config_required_state_must_be_a_valid_state_name() {
+    let env = TestEnv::new();
+    env.write_config("config target=\"~\" required-state=\"../escape\"\n");
+
+    let output = env.fail(&["check"]);
+    assert!(
+        output.contains("invalid `required-state`"),
+        "output:\n{output}"
+    );
+}
+
+#[test]
 fn reapply_without_changes_is_a_noop() {
     let env = TestEnv::with_basic_config();
     env.apply_ok();

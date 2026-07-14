@@ -14,6 +14,7 @@ use crate::state::record::{StateMode, StateRecord};
 use crate::state::tracking::TrackedRemote;
 use crate::state::transaction::{TransactionStore, transaction_alias};
 use crate::workflow::source_resolution::{self, LocalSource};
+use crate::workflow::state_cli_flag;
 use anyhow::{Context, Result};
 
 pub struct RemoteApplyOpts {
@@ -277,6 +278,7 @@ fn run_remote(
         url,
         reference,
         ctx.config.as_deref(),
+        &ctx.state_namespace,
         opts.allow_local_includes,
     )?;
     if !loaded.external_includes_skipped.is_empty() {
@@ -287,6 +289,7 @@ fn run_remote(
             .collect::<Vec<_>>()
             .join("\n");
         let track_flag = if opts.track { " --track" } else { "" };
+        let state_flag = state_cli_flag(&ctx.state_namespace);
         let config_flag = ctx
             .config
             .as_deref()
@@ -295,7 +298,7 @@ fn run_remote(
         anyhow::bail!(
             "the remote config requests local includes:\n{paths}\n\
              re-run with --allow-local-includes to let it read them:\n  \
-             malm apply {url} {ref_flag} --trust-remote{track_flag} --allow-local-includes{config_flag}",
+             malm apply {url} {ref_flag} --trust-remote{track_flag} --allow-local-includes{state_flag}{config_flag}",
             url = redact_url(url)
         );
     }
