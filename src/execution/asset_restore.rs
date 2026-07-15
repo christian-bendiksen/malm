@@ -3,6 +3,7 @@
 //! Planning never restores a pre-merge whole-root record over a shared
 //! parent; such assets re-install per entry instead.
 
+use crate::assets::AssetDeclaration;
 use crate::execution::asset::{MaterializeAsset, materialize_asset};
 use crate::execution::session::ApplySession;
 use anyhow::Result;
@@ -13,6 +14,7 @@ pub(super) fn execute_asset_restore(
     url: &str,
     payload_object: &Path,
     dst: &Path,
+    declaration: &Option<AssetDeclaration>,
     session: &mut ApplySession,
 ) -> Result<()> {
     materialize_asset(
@@ -23,6 +25,7 @@ pub(super) fn execute_asset_restore(
             archive_sha256: None,
             dst,
             refresh_font_cache: false,
+            declaration,
         },
         session,
     )

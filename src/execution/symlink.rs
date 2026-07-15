@@ -11,6 +11,8 @@ use crate::state::transaction::{OperationStatus, PathKind, PreviousState};
 use anyhow::{Context, Result};
 use std::fs;
 use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub(super) fn execute_symlink_create(
@@ -59,6 +61,9 @@ pub(super) fn execute_symlink_create(
         Ok(meta) => PreviousState::Backed {
             backup: session.backup_path_for(dst),
             path_kind: PathKind::of(meta.file_type()),
+            original_mode: Some(meta.permissions().mode() & 0o7777),
+            original_device: Some(meta.dev()),
+            original_inode: Some(meta.ino()),
         },
     };
     let expected_identity = match previous {

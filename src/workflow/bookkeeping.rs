@@ -2,7 +2,7 @@
 //! asset targets to CAS payloads.
 
 use crate::app::context::GlobalCtx;
-use crate::planning::plan::DeploymentPlan;
+use crate::planning::plan::{DeploymentPlan, Operation};
 use crate::source::SourceIdentity;
 use crate::state::ownership::OwnershipWriteContext;
 use crate::state::ownership_store::write_ownership_for;
@@ -16,16 +16,36 @@ pub(crate) fn commit_apply_metadata(
     source: Option<&SourceIdentity>,
     config_path: &Path,
     plan: &DeploymentPlan,
-    plan_targets: &[PathBuf],
+    _plan_targets: &[PathBuf],
     effective_profile: Option<&str>,
     ctx: &GlobalCtx,
     tx_id: Option<&str>,
 ) -> Result<()> {
-    let mut lock = TargetLock::load().context("load target lock")?;
-    lock.update_state(plan_targets, ctx.state_namespace.as_str());
-    lock.save().context("persist target lock")?;
-
     let asset_sources = asset_payload_sources(tx_id)?;
+    let mut managed_targets = Vec::new();
+    for operation in plan.operations() {
+        match operation {
+            Operation::CreateSymlink { target, .. }
+            | Operation::KeepAsset { target, .. }
+            | Operation::RestoreAsset { target, .. } => managed_targets.push(target.clone()),
+            Operation::InstallAsset { name, .. } => {
+                let placements = asset_sources.get(name).ok_or_else(|| {
+                    anyhow::anyhow!("missing concrete placements for asset `{name}`")
+                })?;
+                managed_targets.extend(placements.iter().map(|(target, _)| target.clone()));
+            }
+            Operation::RemovePath { .. } | Operation::RemoveAsset { .. } => {}
+        }
+    }
+    managed_targets.extend(
+        plan.retained_ownership()
+            .iter()
+            .map(|entry| entry.target.clone()),
+    );
+
+    let mut lock = TargetLock::load().context("load target lock")?;
+    lock.update_state(&managed_targets, ctx.state_namespace.as_str());
+    lock.save().context("persist target lock")?;
 
     write_ownership_for(
         plan,

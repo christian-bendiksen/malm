@@ -22,6 +22,13 @@ pub(crate) fn plan_stale_removals(plan: &mut DeploymentPlan, ownership: &Ownersh
     // the recorded source is left in place with a warning.
     for entry in ownership.iter() {
         let path = &entry.target;
+        let consumed_by_asset_update = plan.operations().iter().any(|operation| {
+            matches!(operation, Operation::InstallAsset { previous, .. }
+                if previous.iter().any(|owned| owned.target == *path))
+        });
+        if consumed_by_asset_update {
+            continue;
+        }
         if plan_targets.contains(path.as_path()) {
             continue;
         }
@@ -159,12 +166,14 @@ mod tests {
                 source: source.clone(),
                 owner: OwnerKind::Symlink,
                 transaction: None,
+                asset_declaration: None,
             },
             OwnershipEntry {
                 target: drifted.clone(),
                 source,
                 owner: OwnerKind::Symlink,
                 transaction: None,
+                asset_declaration: None,
             },
         ]);
 
@@ -197,6 +206,7 @@ mod tests {
                 name: "tool".to_owned(),
             },
             transaction: None,
+            asset_declaration: None,
         };
 
         let mut plan = DeploymentPlan::new();
@@ -223,6 +233,7 @@ mod tests {
             source: dir.path().join("src"),
             owner: OwnerKind::Symlink,
             transaction: None,
+            asset_declaration: None,
         }]);
 
         let mut plan = DeploymentPlan::new();
@@ -243,6 +254,7 @@ mod tests {
                 source: "old-source".to_owned(),
             },
             transaction: Some("old-transaction".to_owned()),
+            asset_declaration: None,
         };
         let mut plan = DeploymentPlan::new();
 

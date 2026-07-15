@@ -77,6 +77,33 @@ pub fn build_asset_plan(
             .cloned()
             .collect();
 
+        let declaration = entry.declaration();
+        let declaration_changed = !recorded.is_empty()
+            && recorded.iter().any(|owned| match &owned.asset_declaration {
+                Some(previous) => previous != &declaration,
+                // Older externally-satisfied entries have no archive to
+                // compare. Adopt the current declaration without replacing
+                // their bytes when the installed check still succeeds.
+                None => owned.source != owned.target,
+            });
+
+        // Once an asset is owned, its pinned declaration is authoritative.
+        // `installed-check` detects external/adopted installs and missing
+        // payloads; it must not mask a changed URL, checksum, or format.
+        if declaration_changed {
+            plan.push(Operation::InstallAsset {
+                name: entry.name.clone(),
+                url: entry.url.clone(),
+                target: dst,
+                sha256: entry.sha256.clone(),
+                format: entry.format,
+                refresh_font_cache: entry.refresh_font_cache,
+                declaration: Some(declaration),
+                previous: recorded,
+            });
+            continue;
+        }
+
         if satisfied {
             // A kept asset must remain restorable from the CAS. Reinstall now if
             // any recorded payload is missing.
@@ -89,6 +116,7 @@ pub fn build_asset_plan(
                         name: entry.name.clone(),
                         target: dst,
                         previous: None,
+                        declaration: Some(declaration),
                     });
                 } else {
                     for prev in &recorded {
@@ -96,6 +124,7 @@ pub fn build_asset_plan(
                             name: entry.name.clone(),
                             target: prev.target.clone(),
                             previous: Some(prev.clone()),
+                            declaration: Some(declaration.clone()),
                         });
                     }
                 }
@@ -123,6 +152,7 @@ pub fn build_asset_plan(
                     url: entry.url.clone(),
                     payload: prev.source.clone(),
                     target: prev.target.clone(),
+                    declaration: Some(declaration.clone()),
                 });
             }
             continue;
@@ -135,6 +165,8 @@ pub fn build_asset_plan(
             sha256: entry.sha256.clone(),
             format: entry.format,
             refresh_font_cache: entry.refresh_font_cache,
+            declaration: Some(declaration),
+            previous: recorded,
         });
     }
 
@@ -173,6 +205,13 @@ mod tests {
                 name: name.to_owned(),
             },
             transaction: None,
+            asset_declaration: Some(crate::assets::AssetDeclaration {
+                url: "https://example.invalid/a.tar.xz".to_owned(),
+                sha256: None,
+                format: ArchiveFormat::TarXz,
+                installed_check: Some("adw-gtk3".to_owned()),
+                refresh_font_cache: false,
+            }),
         }
     }
 
@@ -238,5 +277,81 @@ mod tests {
             "{:?}",
             plan.operations()
         );
+    }
+
+    #[test]
+    fn changed_owned_declaration_ignores_satisfied_installed_check() {
+        let root = tempfile::tempdir().unwrap();
+        let themes = root.path().join("themes");
+        std::fs::create_dir_all(themes.join("adw-gtk3")).unwrap();
+
+        let mut current = manifest("adw", "themes", "adw-gtk3");
+        current.assets[0].sha256 = Some("bb".repeat(32));
+        let mut previous = adopted_entry("adw", themes.join("adw-gtk3"));
+        previous.asset_declaration.as_mut().unwrap().sha256 = Some("aa".repeat(32));
+        let mut ownership = OwnershipIndex::new("test".to_owned(), None, None, None);
+        ownership.entries.push(previous);
+
+        let plan = build_asset_plan(&current, root.path(), &ownership, false);
+
+        assert!(plan.errors().is_empty(), "{:?}", plan.errors());
+        assert!(matches!(
+            plan.operations(),
+            [Operation::InstallAsset { declaration: Some(found), previous, .. }]
+                if found.sha256.as_deref() == Some("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb")
+                    && previous.len() == 1
+        ));
+    }
+
+    #[test]
+    fn legacy_adopted_asset_without_declaration_is_not_replaced() {
+        let root = tempfile::tempdir().unwrap();
+        let themes = root.path().join("themes");
+        std::fs::create_dir_all(themes.join("adw-gtk3")).unwrap();
+
+        let mut previous = adopted_entry("adw", themes.join("adw-gtk3"));
+        previous.asset_declaration = None;
+        let mut ownership = OwnershipIndex::new("test".to_owned(), None, None, None);
+        ownership.entries.push(previous);
+
+        let plan = build_asset_plan(
+            &manifest("adw", "themes", "adw-gtk3"),
+            root.path(),
+            &ownership,
+            false,
+        );
+
+        assert!(matches!(
+            plan.operations(),
+            [Operation::KeepAsset {
+                declaration: Some(_),
+                previous: Some(_),
+                ..
+            }]
+        ));
+    }
+
+    #[test]
+    fn legacy_archived_asset_without_declaration_refreshes_once() {
+        let root = tempfile::tempdir().unwrap();
+        let target = root.path().join("themes/adw-gtk3");
+        std::fs::create_dir_all(&target).unwrap();
+        let mut previous = adopted_entry("adw", target);
+        previous.source = root.path().join("cas/old-payload");
+        previous.asset_declaration = None;
+        let mut ownership = OwnershipIndex::new("test".to_owned(), None, None, None);
+        ownership.entries.push(previous);
+
+        let plan = build_asset_plan(
+            &manifest("adw", "themes", "adw-gtk3"),
+            root.path(),
+            &ownership,
+            false,
+        );
+
+        assert!(matches!(
+            plan.operations(),
+            [Operation::InstallAsset { previous, .. }] if previous.len() == 1
+        ));
     }
 }

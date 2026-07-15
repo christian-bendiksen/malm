@@ -235,6 +235,8 @@ mod tests {
             sha256: None,
             format: crate::assets::ArchiveFormat::TarXz,
             refresh_font_cache: false,
+            declaration: None,
+            previous: Vec::new(),
         }
     }
 

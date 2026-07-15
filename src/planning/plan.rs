@@ -1,6 +1,6 @@
 //! Executable plan operations, findings, and their cached dependency graph.
 
-use crate::assets::ArchiveFormat;
+use crate::assets::{ArchiveFormat, AssetDeclaration};
 use crate::config::{ConfigFileProvenance, ConflictPolicy, MissingSourcePolicy};
 use crate::planning::graph::analyze_operation_graph;
 use crate::state::ownership::OwnershipEntry;
@@ -29,17 +29,21 @@ pub enum Operation {
         sha256: Option<String>,
         format: ArchiveFormat,
         refresh_font_cache: bool,
+        declaration: Option<AssetDeclaration>,
+        previous: Vec<OwnershipEntry>,
     },
     KeepAsset {
         name: String,
         target: PathBuf,
         previous: Option<OwnershipEntry>,
+        declaration: Option<AssetDeclaration>,
     },
     RestoreAsset {
         name: String,
         url: String,
         payload: PathBuf,
         target: PathBuf,
+        declaration: Option<AssetDeclaration>,
     },
     /// Remove an installed asset whose on-disk content still matches
     /// `payload` (re-verified at execution time); used by disable/destroy.

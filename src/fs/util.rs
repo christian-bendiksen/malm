@@ -5,6 +5,9 @@ use crate::fs::atomic;
 use crate::fs::inspect::PathIdentity;
 use anyhow::{Context, Result};
 use std::fs;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 /// Move `from` to `to`, durably.
@@ -49,6 +52,97 @@ pub fn move_path(from: &Path, to: &Path) -> Result<()> {
     atomic::sync_parent_dir(to)?;
     atomic::sync_parent_dir(from)?;
     Ok(())
+}
+
+/// Move a managed tree whose root may be sealed read-only, restoring its
+/// original mode at whichever path contains it after the attempt.
+pub fn move_managed_tree(from: &Path, to: &Path, final_mode: Option<u32>) -> Result<()> {
+    let metadata = fs::symlink_metadata(from)
+        .with_context(|| format!("inspect managed tree {}", from.display()))?;
+    if let Some(parent) = to.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("create parent for {}", to.display()))?;
+        if metadata.file_type().is_dir()
+            && metadata.dev()
+                != fs::symlink_metadata(parent)
+                    .with_context(|| format!("inspect {}", parent.display()))?
+                    .dev()
+        {
+            anyhow::bail!(
+                "cannot move sealed managed tree {} across filesystems to {}",
+                from.display(),
+                to.display()
+            );
+        }
+    }
+
+    let initial_mode = metadata.permissions().mode() & 0o7777;
+    let needs_mode_change = metadata.file_type().is_dir()
+        && (initial_mode & 0o200 == 0 || final_mode.is_some_and(|mode| mode != initial_mode));
+    let opened = if needs_mode_change {
+        let directory = fs::OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+            .open(from)
+            .with_context(|| format!("open managed tree {}", from.display()))?;
+        let opened_metadata = directory
+            .metadata()
+            .with_context(|| format!("inspect opened managed tree {}", from.display()))?;
+        if opened_metadata.dev() != metadata.dev() || opened_metadata.ino() != metadata.ino() {
+            anyhow::bail!(
+                "{} changed while preparing it for a managed move",
+                from.display()
+            );
+        }
+        let original_mode = opened_metadata.permissions().mode() & 0o7777;
+        let temporarily_unsealed = original_mode & 0o200 == 0;
+        if temporarily_unsealed {
+            rustix::fs::fchmod(
+                &directory,
+                rustix::fs::Mode::from_raw_mode(original_mode | 0o700),
+            )
+            .map_err(std::io::Error::from)
+            .with_context(|| format!("temporarily make {} movable", from.display()))?;
+        }
+        Some((directory, final_mode.unwrap_or(original_mode)))
+    } else {
+        None
+    };
+
+    let result = move_path(from, to);
+    if let Some((directory, mode)) = opened {
+        // Restore through the descriptor so a concurrent pathname swap can
+        // never receive the managed tree's mode.
+        rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(mode))
+            .map_err(std::io::Error::from)
+            .with_context(|| format!("restore mode on managed tree {}", from.display()))?;
+    }
+    result
+}
+
+/// Restore a managed directory's mode only when an `O_NOFOLLOW` descriptor
+/// still identifies the inode recorded before mutation.
+pub fn restore_managed_directory_mode(
+    path: &Path,
+    expected_device: u64,
+    expected_inode: u64,
+    mode: u32,
+) -> Result<bool> {
+    let directory = fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY | libc::O_NOFOLLOW)
+        .open(path)
+        .with_context(|| format!("open managed tree {}", path.display()))?;
+    let metadata = directory
+        .metadata()
+        .with_context(|| format!("inspect opened managed tree {}", path.display()))?;
+    if metadata.dev() != expected_device || metadata.ino() != expected_inode {
+        return Ok(false);
+    }
+    rustix::fs::fchmod(&directory, rustix::fs::Mode::from_raw_mode(mode))
+        .map_err(std::io::Error::from)
+        .with_context(|| format!("restore mode on managed tree {}", path.display()))?;
+    Ok(true)
 }
 
 pub fn copy_recursive(src: &Path, dst: &Path) -> Result<()> {
@@ -200,6 +294,28 @@ pub fn remove_path(path: &Path) -> Result<()> {
     } else {
         fs::remove_file(path).with_context(|| format!("remove {}", path.display()))
     }
+}
+
+/// Add owner access to directories in a verified managed tree so it can be
+/// removed. Asset payloads are deployed read-only, and `remove_dir_all` needs
+/// write permission on each directory to unlink its children.
+pub fn make_tree_removable(root: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(root)
+        .with_context(|| format!("inspect managed tree {}", root.display()))?;
+    if !metadata.file_type().is_dir() {
+        return Ok(());
+    }
+    for entry in walkdir::WalkDir::new(root).follow_links(false) {
+        let entry = entry.with_context(|| format!("walk managed tree {}", root.display()))?;
+        if entry.file_type().is_dir() {
+            let metadata = fs::symlink_metadata(entry.path())
+                .with_context(|| format!("inspect {}", entry.path().display()))?;
+            let mode = metadata.permissions().mode() | 0o700;
+            fs::set_permissions(entry.path(), fs::Permissions::from_mode(mode))
+                .with_context(|| format!("make {} removable", entry.path().display()))?;
+        }
+    }
+    Ok(())
 }
 
 #[cfg(test)]

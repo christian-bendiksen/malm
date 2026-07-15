@@ -79,6 +79,7 @@ fn apply_plan_with_store(
                     name,
                     target,
                     previous,
+                    declaration,
                 } => Some(DesiredAsset {
                     name: name.clone(),
                     target: target.clone(),
@@ -89,6 +90,7 @@ fn apply_plan_with_store(
                     transaction: previous
                         .as_ref()
                         .and_then(|entry| entry.transaction.clone()),
+                    declaration: declaration.clone(),
                 }),
                 _ => None,
             })
@@ -131,6 +133,18 @@ fn apply_plan_with_store(
     let mut session = ApplySession::begin(manifest, store.clone())?;
     failpoint!("apply.after_manifest_write");
 
+    // Release obsolete concrete asset placements before any new owner can
+    // claim them. Doing this as a pre-phase makes shared-root ownership
+    // handoffs independent of declaration/topological order.
+    if let Err(error) = remove_obsolete_asset_placements(plan, &prefetched, &mut session) {
+        let alias = session.alias();
+        session.fail();
+        return Err(error).context(format!(
+            "failed to remove obsolete asset placements before apply — run `malm state recover \
+             {alias}` to restore the previous state"
+        ));
+    }
+
     // Apply mutations serially in dependency order so recovery can replay the
     // deterministic journal in reverse.
     for batch in graph.batched_topo_sorted() {
@@ -147,8 +161,8 @@ fn apply_plan_with_store(
                 session.fail();
                 let total = batch.len();
                 return Err(err).context(format!(
-                    "operation #{op_idx} failed; {applied_in_batch} of {total} operations in this \
-                     batch were already applied to the filesystem — run `malm state recover \
+                    "operation #{op_idx} failed after {applied_in_batch} of {total} operations in \
+                     this batch were processed — run `malm state recover \
                      {alias}` to restore the previous state"
                 ));
             }
@@ -210,6 +224,7 @@ fn execute_operation(
             target: dst,
             sha256,
             refresh_font_cache,
+            declaration,
             ..
         } => {
             let payload = prefetched.payload_for(op_index, name)?.to_path_buf();
@@ -220,6 +235,7 @@ fn execute_operation(
                     dst,
                     sha256,
                     refresh_font_cache: *refresh_font_cache,
+                    declaration,
                 },
                 &payload,
                 prefetched.merge_entries_for(op_index),
@@ -237,6 +253,43 @@ fn execute_operation(
             url,
             payload,
             target: dst,
-        } => execute_asset_restore(name, url, payload, dst, session),
+            declaration,
+        } => execute_asset_restore(name, url, payload, dst, declaration, session),
     }
+}
+
+fn remove_obsolete_asset_placements(
+    plan: &DeploymentPlan,
+    prefetched: &PrefetchedAssets,
+    session: &mut ApplySession,
+) -> Result<()> {
+    for (op_index, operation) in plan.operations().iter().enumerate() {
+        let Operation::InstallAsset {
+            name,
+            target,
+            previous,
+            ..
+        } = operation
+        else {
+            continue;
+        };
+        let placements: std::collections::HashSet<_> = match prefetched.merge_entries_for(op_index)
+        {
+            Some(entries) => entries.iter().map(|entry| target.join(entry)).collect(),
+            None => std::iter::once(target.clone()).collect(),
+        };
+        for owned in previous
+            .iter()
+            .filter(|owned| !placements.contains(&owned.target))
+            .filter(|owned| owned.source != owned.target)
+        {
+            crate::execution::asset::execute_asset_remove(
+                name,
+                &owned.target,
+                &owned.source,
+                session,
+            )?;
+        }
+    }
+    Ok(())
 }

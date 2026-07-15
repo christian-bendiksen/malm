@@ -99,11 +99,15 @@ pub fn write_ownership_for(
                     .persisted()
                     .ok_or_else(|| anyhow::anyhow!("stale owner cannot own {}", dst.display()))?,
                 transaction: ctx.transaction_id.map(|s| s.to_owned()),
+                asset_declaration: None,
             }),
             // Merge placement creates one managed tree per top-level payload
             // directory. Record each placement, not the shared extraction root.
             Operation::InstallAsset {
-                name, target: dst, ..
+                name,
+                target: dst,
+                declaration,
+                ..
             } => {
                 let placements = asset_sources
                     .get(name.as_str())
@@ -121,6 +125,7 @@ pub fn write_ownership_for(
                         source: payload.clone(),
                         owner: OwnerKind::Asset { name: name.clone() },
                         transaction: ctx.transaction_id.map(|s| s.to_owned()),
+                        asset_declaration: declaration.clone(),
                     });
                 }
             }
@@ -129,27 +134,32 @@ pub fn write_ownership_for(
                 name,
                 target: dst,
                 previous,
+                declaration,
             } => {
                 let mut entry = previous.clone().unwrap_or_else(|| OwnershipEntry {
                     target: dst.clone(),
                     source: dst.clone(),
                     owner: OwnerKind::Asset { name: name.clone() },
                     transaction: ctx.transaction_id.map(|id| id.to_owned()),
+                    asset_declaration: declaration.clone(),
                 });
                 entry.target = dst.clone();
                 entry.owner = OwnerKind::Asset { name: name.clone() };
+                entry.asset_declaration = declaration.clone();
                 index.entries.push(entry);
             }
             Operation::RestoreAsset {
                 name,
                 target: dst,
                 payload,
+                declaration,
                 ..
             } => index.entries.push(OwnershipEntry {
                 target: dst.clone(),
                 source: payload.clone(),
                 owner: OwnerKind::Asset { name: name.clone() },
                 transaction: ctx.transaction_id.map(|s| s.to_owned()),
+                asset_declaration: declaration.clone(),
             }),
             Operation::RemovePath { .. } | Operation::RemoveAsset { .. } => {}
         }

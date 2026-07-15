@@ -63,6 +63,7 @@ fn planned_ownership_signature(
                 name,
                 target,
                 previous,
+                ..
             } => {
                 let source = previous
                     .as_ref()

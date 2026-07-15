@@ -1,7 +1,7 @@
 //! Builds asset payloads in the CAS, then places them atomically with backup
 //! and failure recovery.
 
-use crate::assets::{ArchiveFormat, download_archive, extract_archive};
+use crate::assets::{ArchiveFormat, AssetDeclaration, download_archive, extract_archive};
 use crate::cas::{
     asset_archive_object, asset_payload_object, cached_asset_payload, object_present, objects_dir,
     record_asset_payload, store_blob, store_tree, tree_hash,
@@ -9,13 +9,15 @@ use crate::cas::{
 use crate::execution::captured_identity;
 use crate::execution::session::ApplySession;
 use crate::fs::inspect::PathIdentity;
-use crate::fs::util::{copy_recursive, move_path, remove_path};
+use crate::fs::util::{copy_recursive, make_tree_removable, move_managed_tree, remove_path};
 use crate::output::display::format_short_path;
 use crate::state::transaction::{OperationStatus, PathKind, PreviousState};
 use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use std::fs;
 use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub(super) struct AssetInstall<'a> {
@@ -24,6 +26,7 @@ pub(super) struct AssetInstall<'a> {
     pub dst: &'a Path,
     pub sha256: &'a Option<String>,
     pub refresh_font_cache: bool,
+    pub declaration: &'a Option<AssetDeclaration>,
 }
 
 /// Install a prefetched asset payload at its destination. The payload must
@@ -48,6 +51,7 @@ pub(super) fn execute_asset_install(
         request.dst,
         merge,
         request.refresh_font_cache,
+        request.declaration,
         session,
     )
 }
@@ -64,6 +68,7 @@ pub(super) fn place_payload(
     dst: &Path,
     merge: Option<&[String]>,
     refresh_font_cache: bool,
+    declaration: &Option<AssetDeclaration>,
     session: &mut ApplySession,
 ) -> Result<()> {
     let Some(entries) = merge else {
@@ -75,6 +80,7 @@ pub(super) fn place_payload(
                 archive_sha256,
                 dst,
                 refresh_font_cache,
+                declaration,
             },
             session,
         );
@@ -91,6 +97,7 @@ pub(super) fn place_payload(
                 archive_sha256: archive_sha256.clone(),
                 dst: &dst.join(entry),
                 refresh_font_cache: false,
+                declaration,
             },
             session,
         )?;
@@ -172,6 +179,7 @@ pub(super) struct MaterializeAsset<'a> {
     pub archive_sha256: Option<String>,
     pub dst: &'a Path,
     pub refresh_font_cache: bool,
+    pub declaration: &'a Option<AssetDeclaration>,
 }
 
 pub(super) fn materialize_asset(
@@ -185,6 +193,7 @@ pub(super) fn materialize_asset(
         archive_sha256,
         dst,
         refresh_font_cache,
+        declaration,
     } = request;
     if !object_present(payload_object, true)? {
         anyhow::bail!(
@@ -196,10 +205,17 @@ pub(super) fn materialize_asset(
     let previous = match fs::symlink_metadata(dst) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => PreviousState::Missing,
         Err(e) => return Err(e).with_context(|| format!("stat {}", dst.display())),
-        Ok(meta) => PreviousState::Backed {
-            backup: session.backup_path_for(dst),
-            path_kind: PathKind::of(meta.file_type()),
-        },
+        Ok(meta) => {
+            let path_kind = PathKind::of(meta.file_type());
+            PreviousState::Backed {
+                backup: session.backup_path_for(dst),
+                path_kind,
+                original_mode: matches!(path_kind, PathKind::File | PathKind::Directory)
+                    .then(|| meta.permissions().mode() & 0o7777),
+                original_device: Some(meta.dev()),
+                original_inode: Some(meta.ino()),
+            }
+        }
     };
     let expected_identity = match &previous {
         PreviousState::Backed { .. } => Some(
@@ -215,6 +231,7 @@ pub(super) fn materialize_asset(
         dst.to_path_buf(),
         payload_object.to_path_buf(),
         archive_sha256.clone(),
+        declaration.clone(),
         previous.clone(),
     )?;
 
@@ -295,11 +312,15 @@ pub(super) fn execute_asset_remove(
     payload: &Path,
     session: &mut ApplySession,
 ) -> Result<()> {
-    match fs::symlink_metadata(dst) {
+    let (original_mode, original_device, original_inode) = match fs::symlink_metadata(dst) {
         Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(e) => return Err(e).with_context(|| format!("stat {}", dst.display())),
-        Ok(_) => {}
-    }
+        Ok(metadata) => (
+            metadata.permissions().mode() & 0o7777,
+            metadata.dev(),
+            metadata.ino(),
+        ),
+    };
 
     let expected = payload
         .file_name()
@@ -328,6 +349,9 @@ pub(super) fn execute_asset_remove(
         dst.to_path_buf(),
         payload.to_path_buf(),
         quarantine.clone(),
+        Some(original_mode),
+        Some(original_device),
+        Some(original_inode),
     )?;
 
     let result = quarantine_asset(name, dst, &quarantine, expected);
@@ -353,13 +377,13 @@ pub(super) fn execute_asset_remove(
 /// captured tree still matches the expected object id; a mismatch (content
 /// swapped after the pre-check) moves it back untouched.
 fn quarantine_asset(name: &str, dst: &Path, quarantine: &Path, expected: &str) -> Result<()> {
-    move_path(dst, quarantine)
+    move_managed_tree(dst, quarantine, None)
         .with_context(|| format!("quarantine installed asset {}", dst.display()))?;
     crate::failpoint!("asset.remove.after_quarantine");
     let captured =
         tree_hash(quarantine).with_context(|| format!("hash quarantined asset '{name}'"))?;
     if captured != expected {
-        move_path(quarantine, dst).with_context(|| {
+        move_managed_tree(quarantine, dst, None).with_context(|| {
             format!(
                 "restore swapped content to {} (it remains in {})",
                 dst.display(),
@@ -420,11 +444,12 @@ pub(super) fn backup_existing_destination(
             .with_context(|| format!("create backup dir {}", parent.display()))?;
     }
     expected_identity.ensure_unchanged(dst)?;
-    move_path(dst, backup).with_context(|| format!("back up {}", dst.display()))
+    move_managed_tree(dst, backup, None).with_context(|| format!("back up {}", dst.display()))
 }
 
 fn remove_partial_install(dst: &Path) -> Result<()> {
     if fs::symlink_metadata(dst).is_ok() {
+        make_tree_removable(dst)?;
         remove_path(dst)
             .with_context(|| format!("remove partial asset install {}", dst.display()))?;
     }
@@ -436,7 +461,28 @@ pub(super) fn restore_asset_backup_after_failed_install(
     backup: &Path,
     remove_malm_placement: bool,
 ) -> Result<()> {
+    match fs::symlink_metadata(backup) {
+        Ok(_) => {}
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            // The backup rename can fail before touching `dst` (for example,
+            // when its parent is not writable). In that state the original is
+            // already where rollback wants it, so there is nothing to restore.
+            if !remove_malm_placement && fs::symlink_metadata(dst).is_ok() {
+                return Ok(());
+            }
+            anyhow::bail!(
+                "cannot restore {}: backup {} is missing",
+                dst.display(),
+                backup.display()
+            );
+        }
+        Err(error) => {
+            return Err(error).with_context(|| format!("inspect backup {}", backup.display()));
+        }
+    }
+
     if remove_malm_placement && fs::symlink_metadata(dst).is_ok() {
+        make_tree_removable(dst)?;
         remove_path(dst)
             .with_context(|| format!("remove partial asset install {}", dst.display()))?;
     }
@@ -454,6 +500,7 @@ pub(super) fn restore_asset_backup_after_failed_install(
             backup.display()
         );
     }
+    make_tree_removable(backup)?;
     remove_path(backup).with_context(|| format!("remove restored backup {}", backup.display()))?;
     // The backup is gone; sync its directory so the removal is durable.
     crate::fs::atomic::sync_parent_dir(backup)?;
@@ -494,6 +541,7 @@ fn refresh_font_cache_best_effort() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     /// The TOCTOU guard: content swapped in after the pre-check hash must
     /// never be deleted. It is quarantined, detected, and moved back.
@@ -503,6 +551,7 @@ mod tests {
         let dst = dir.path().join("asset");
         fs::create_dir_all(&dst).unwrap();
         fs::write(dst.join("swapped-in"), b"user data, not ours").unwrap();
+        fs::set_permissions(&dst, fs::Permissions::from_mode(0o700)).unwrap();
 
         let quarantine = dir.path().join("backups/asset");
         let err = quarantine_asset("demo", &dst, &quarantine, "sha256-notthecontent")
@@ -515,6 +564,11 @@ mod tests {
             fs::read(dst.join("swapped-in")).unwrap(),
             b"user data, not ours",
             "the replacement is restored untouched"
+        );
+        assert_eq!(
+            fs::symlink_metadata(&dst).unwrap().permissions().mode() & 0o777,
+            0o700,
+            "the replacement mode is restored untouched"
         );
         assert!(
             fs::symlink_metadata(&quarantine).is_err(),
@@ -539,5 +593,49 @@ mod tests {
             b"payload",
             "the exact bytes survive in quarantine"
         );
+    }
+
+    #[test]
+    fn failed_backup_without_backup_leaf_leaves_original_in_place() {
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("asset");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("original"), b"precious").unwrap();
+        let backup = dir.path().join("backups/asset");
+
+        restore_asset_backup_after_failed_install(&dst, &backup, false).unwrap();
+
+        assert_eq!(fs::read(dst.join("original")).unwrap(), b"precious");
+        assert!(fs::symlink_metadata(&backup).is_err());
+    }
+
+    #[test]
+    fn readonly_asset_root_can_be_replaced_from_writable_parent() {
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("asset");
+        fs::create_dir(&dst).unwrap();
+        fs::write(dst.join("version"), b"old").unwrap();
+        fs::set_permissions(&dst, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let payload = dir.path().join("payload");
+        fs::create_dir(&payload).unwrap();
+        fs::write(payload.join("version"), b"new").unwrap();
+        fs::set_permissions(payload.join("version"), fs::Permissions::from_mode(0o444)).unwrap();
+        fs::set_permissions(&payload, fs::Permissions::from_mode(0o555)).unwrap();
+
+        let backup = dir.path().join("backups/asset");
+        let identity = PathIdentity::capture(&dst).unwrap();
+        backup_existing_destination(&dst, &backup, &identity).unwrap();
+        materialize_payload(&payload, &dst).unwrap();
+
+        assert_eq!(fs::read(dst.join("version")).unwrap(), b"new");
+        assert_eq!(
+            fs::symlink_metadata(&dst).unwrap().permissions().mode() & 0o222,
+            0,
+            "owned asset root remains sealed"
+        );
+        assert_eq!(fs::read(backup.join("version")).unwrap(), b"old");
+
+        make_tree_removable(dir.path()).unwrap();
     }
 }

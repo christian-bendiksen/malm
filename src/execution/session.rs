@@ -1,5 +1,6 @@
 //! Owns the manifest, journal, and durable phase changes for a live apply.
 
+use crate::assets::AssetDeclaration;
 use crate::domain::owner::OwnerKind;
 use crate::state::transaction::{
     ApplyPhase, OperationStatus, PreviousState, TransactionManifest, TransactionStatus,
@@ -70,17 +71,27 @@ impl ApplySession {
     }
 
     /// Journal an asset removal before touching `dst`.
+    #[allow(clippy::too_many_arguments)]
     pub fn journal_remove_asset_started(
         &mut self,
         name: String,
         dst: PathBuf,
         payload: PathBuf,
         quarantine: PathBuf,
+        original_mode: Option<u32>,
+        original_device: Option<u64>,
+        original_inode: Option<u64>,
     ) -> Result<usize> {
         let context = format!("persist journal before removing asset {name}");
-        let index = self
-            .manifest
-            .record_remove_asset_started(name, dst, payload, quarantine);
+        let index = self.manifest.record_remove_asset_started(
+            name,
+            dst,
+            payload,
+            quarantine,
+            original_mode,
+            original_device,
+            original_inode,
+        );
         self.append_journal(index, &context)
     }
 
@@ -93,12 +104,19 @@ impl ApplySession {
         dst: PathBuf,
         payload: PathBuf,
         archive_sha256: Option<String>,
+        declaration: Option<AssetDeclaration>,
         previous: PreviousState,
     ) -> Result<usize> {
         let context = format!("persist journal before installing asset {name}");
-        let index =
-            self.manifest
-                .record_asset_started(name, url, dst, payload, archive_sha256, previous);
+        let index = self.manifest.record_asset_started(
+            name,
+            url,
+            dst,
+            payload,
+            archive_sha256,
+            declaration,
+            previous,
+        );
         self.append_journal(index, &context)
     }
 

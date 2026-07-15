@@ -2,6 +2,7 @@
 
 use crate::execution::asset::build_asset_payload_object;
 use crate::planning::plan::{DeploymentPlan, Operation};
+use crate::policy::destination::resolve_destination_physically;
 use anyhow::{Context, Result};
 use rayon::prelude::*;
 use std::collections::HashMap;
@@ -116,7 +117,21 @@ fn validate_placements(plan: &DeploymentPlan, prefetched: &PrefetchedAssets) -> 
             Operation::RestoreAsset { name, target, .. } => {
                 placements.push((target.clone(), name.as_str()));
             }
+            Operation::KeepAsset { name, target, .. } => {
+                placements.push((target.clone(), name.as_str()));
+            }
             _ => {}
+        }
+    }
+    placements.extend(plan.retained_ownership().iter().filter_map(|owned| {
+        let crate::state::ownership::OwnerKind::Asset { name } = &owned.owner else {
+            return None;
+        };
+        Some((owned.target.clone(), name.as_str()))
+    }));
+    for (path, _) in &mut placements {
+        if let Some(physical) = resolve_destination_physically(path) {
+            *path = physical;
         }
     }
 
@@ -155,6 +170,8 @@ mod tests {
             sha256: None,
             format: ArchiveFormat::TarXz,
             refresh_font_cache: false,
+            declaration: None,
+            previous: Vec::new(),
         }
     }
 
@@ -198,6 +215,44 @@ mod tests {
         // may not share it with another asset's entries.
         let pre = prefetched(&[(0, &["adw-gtk3"])]);
         let error = validate_placements(&plan, &pre).unwrap_err().to_string();
+        assert!(error.contains("would both manage"), "{error}");
+    }
+
+    #[test]
+    fn new_merge_placement_cannot_replace_kept_asset() {
+        let plan = plan_with(vec![
+            install("new", "/themes"),
+            Operation::KeepAsset {
+                name: "existing".to_owned(),
+                target: PathBuf::from("/themes/shared"),
+                previous: None,
+                declaration: None,
+            },
+        ]);
+        let pre = prefetched(&[(0, &["shared"])]);
+
+        let error = validate_placements(&plan, &pre)
+            .expect_err("new placement must not overlap kept ownership")
+            .to_string();
+        assert!(error.contains("would both manage"), "{error}");
+    }
+
+    #[test]
+    fn physical_destination_aliases_cannot_claim_the_same_placement() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let alias = dir.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let plan = plan_with(vec![
+            install("a", real.to_str().unwrap()),
+            install("b", alias.to_str().unwrap()),
+        ]);
+        let pre = prefetched(&[(0, &["shared"]), (1, &["shared"])]);
+
+        let error = validate_placements(&plan, &pre)
+            .expect_err("physical aliases must collide")
+            .to_string();
         assert!(error.contains("would both manage"), "{error}");
     }
 }

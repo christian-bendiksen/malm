@@ -10,7 +10,8 @@ use crate::state::record::{StateMode, StateRecord, live_deployment_id};
 use crate::state::state_namespaces;
 use crate::state::target_lock::TargetLock;
 use crate::state::transaction::{
-    TransactionKind, TransactionStatus, TransactionStore, transaction_alias, transactions_dir,
+    PreviousState, RecordedOp, TransactionKind, TransactionManifest, TransactionStatus,
+    TransactionStore, transaction_alias, transactions_dir,
 };
 use anyhow::{Context, Result};
 use std::collections::BTreeSet;
@@ -160,11 +161,10 @@ fn check_transactions(store: &TransactionStore, findings: &mut Vec<Finding>) -> 
             );
         }
 
-        let backups = entry.path().join("backups");
         if matches!(
             manifest.status,
             TransactionStatus::Completed | TransactionStatus::RolledBack
-        ) && backups.is_dir()
+        ) && manifest_has_retained_backups(&manifest)
         {
             findings.push(
                 Finding::new(
@@ -181,6 +181,20 @@ fn check_transactions(store: &TransactionStore, findings: &mut Vec<Finding>) -> 
         }
     }
     Ok(())
+}
+
+fn manifest_has_retained_backups(manifest: &TransactionManifest) -> bool {
+    manifest.operations.iter().any(|operation| match operation {
+        RecordedOp::CreateSymlink { previous, .. }
+        | RecordedOp::RemovePath { previous, .. }
+        | RecordedOp::InstallAsset { previous, .. } => {
+            matches!(previous, PreviousState::Backed { backup, .. }
+                if std::fs::symlink_metadata(backup).is_ok())
+        }
+        RecordedOp::RemoveAsset { quarantine, .. } => quarantine
+            .as_ref()
+            .is_some_and(|path| std::fs::symlink_metadata(path).is_ok()),
+    })
 }
 
 fn check_namespace(
@@ -608,7 +622,7 @@ fn check_tracking(store: &TransactionStore, namespace: &str, findings: &mut Vec<
 fn check_disable_consistency(
     store: &TransactionStore,
     namespace: &str,
-    manifests_newest_first: &[crate::state::transaction::TransactionManifest],
+    manifests_newest_first: &[TransactionManifest],
     findings: &mut Vec<Finding>,
 ) {
     // Unreadable records are already reported by check_namespace.

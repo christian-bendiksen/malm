@@ -66,6 +66,7 @@ pub(crate) fn frozen_plan_from_manifest(
                 url,
                 dst,
                 payload,
+                declaration,
                 ..
             } => {
                 validate_recorded_destination(dst)?;
@@ -83,6 +84,7 @@ pub(crate) fn frozen_plan_from_manifest(
                     url: url.clone(),
                     payload: payload.clone(),
                     target: dst.clone(),
+                    declaration: declaration.clone(),
                 });
             }
             RecordedOp::CreateSymlink { .. }
@@ -146,7 +148,9 @@ pub(crate) fn frozen_plan_from_manifest(
                         name: asset.name.clone(),
                     },
                     transaction: asset.transaction.clone(),
+                    asset_declaration: asset.declaration.clone(),
                 }),
+                declaration: asset.declaration.clone(),
             });
         } else if archived {
             let url = manifest
@@ -166,6 +170,7 @@ pub(crate) fn frozen_plan_from_manifest(
                 url,
                 payload: asset.source.clone(),
                 target: asset.target.clone(),
+                declaration: asset.declaration.clone(),
             });
         } else {
             anyhow::bail!(

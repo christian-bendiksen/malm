@@ -12,7 +12,9 @@ use crate::app::prompt::confirm;
 use crate::cas::{sources_object_dir, tree_hash};
 use crate::domain::id::StateName;
 use crate::failpoint;
-use crate::fs::util::{move_path, remove_path};
+use crate::fs::util::{
+    make_tree_removable, move_managed_tree, move_path, remove_path, restore_managed_directory_mode,
+};
 use crate::sanitize::terminal;
 use crate::source::store::SourceSnapshot;
 use crate::state::active_deployment::{restore_source_pointer, set_source_pointer};
@@ -30,6 +32,8 @@ use anyhow::{Context, Result};
 use owo_colors::OwoColorize;
 use std::fs;
 use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 pub struct RecoverOpts {
@@ -388,19 +392,35 @@ fn undo_op(op: &RecordedOp, act: bool) -> Result<UndoOutcome> {
             dst,
             payload,
             quarantine,
+            original_mode,
+            original_device,
+            original_inode,
             ..
-        } => undo_asset_remove(name, dst, payload, quarantine.as_deref(), act),
+        } => undo_asset_remove(
+            name,
+            dst,
+            payload,
+            quarantine.as_deref(),
+            *original_mode,
+            *original_device,
+            *original_inode,
+            act,
+        ),
     }
 }
 
 /// Undo an asset removal. Prefers moving the quarantined tree back (the
 /// exact removed bytes, including mtimes/xattrs); falls back to reinstalling
 /// the CAS payload for pre-quarantine manifests or a missing quarantine.
+#[allow(clippy::too_many_arguments)]
 fn undo_asset_remove(
     name: &str,
     dst: &Path,
     payload: &Path,
     quarantine: Option<&Path>,
+    original_mode: Option<u32>,
+    original_device: Option<u64>,
+    original_inode: Option<u64>,
     act: bool,
 ) -> Result<UndoOutcome> {
     match fs::symlink_metadata(dst) {
@@ -418,7 +438,31 @@ fn undo_asset_remove(
                         .unwrap_or(false)
                 });
             return Ok(if converged {
-                UndoOutcome::Converged
+                if let (Some(mode), Some(device), Some(inode)) =
+                    (original_mode, original_device, original_inode)
+                    && fs::symlink_metadata(dst)?.permissions().mode() & 0o7777 != mode
+                {
+                    if !act {
+                        UndoOutcome::WouldUndo(format!(
+                            "restore mode on asset '{name}' at {}",
+                            dst.display()
+                        ))
+                    } else {
+                        if restore_managed_directory_mode(dst, device, inode, mode)? {
+                            UndoOutcome::Undone(format!(
+                                "restored mode on asset '{name}' at {}",
+                                dst.display()
+                            ))
+                        } else {
+                            UndoOutcome::Skipped(format!(
+                                "asset '{name}' at {} changed while restoring its mode",
+                                dst.display()
+                            ))
+                        }
+                    }
+                } else {
+                    UndoOutcome::Converged
+                }
             } else {
                 UndoOutcome::Skipped(format!(
                     "asset '{name}' destination {} is occupied by other content",
@@ -433,7 +477,7 @@ fn undo_asset_remove(
         if !act {
             return Ok(UndoOutcome::WouldUndo(what));
         }
-        move_path(quarantine, dst)
+        move_managed_tree(quarantine, dst, original_mode)
             .with_context(|| format!("restore quarantined asset to {}", dst.display()))?;
         return Ok(UndoOutcome::Undone(what));
     }
@@ -494,7 +538,11 @@ fn undo_symlink_create(
                     .with_context(|| format!("recreate previous symlink {}", dst.display()))?;
                 Ok(UndoOutcome::Undone(what))
             }
-            PreviousState::Backed { backup, .. } => restore_backup_to(backup, dst, act),
+            PreviousState::Backed {
+                backup,
+                original_mode,
+                ..
+            } => restore_backup_to(backup, dst, *original_mode, act),
         },
         Some(metadata) if metadata.file_type().is_symlink() => {
             let current_target = dst
@@ -627,7 +675,11 @@ fn undo_asset_install(
 
     match metadata {
         None => match previous {
-            PreviousState::Backed { backup, .. } => restore_backup_to(backup, dst, act),
+            PreviousState::Backed {
+                backup,
+                original_mode,
+                ..
+            } => restore_backup_to(backup, dst, *original_mode, act),
             _ => Ok(UndoOutcome::Converged),
         },
         Some(metadata) => {
@@ -641,6 +693,43 @@ fn undo_asset_install(
                             .unwrap_or(false)
                     });
             if !is_our_payload {
+                if let PreviousState::Backed {
+                    backup,
+                    original_mode,
+                    original_device,
+                    original_inode,
+                    ..
+                } = previous
+                    && !backup.exists()
+                {
+                    let current = fs::symlink_metadata(dst)?;
+                    if let (Some(mode), Some(device), Some(inode)) =
+                        (original_mode, original_device, original_inode)
+                        && *device == current.dev()
+                        && *inode == current.ino()
+                        && current.permissions().mode() & 0o7777 != *mode
+                    {
+                        let what = format!(
+                            "restore mode on original asset '{}' at {}",
+                            name,
+                            dst.display()
+                        );
+                        if !act {
+                            return Ok(UndoOutcome::WouldUndo(what));
+                        }
+                        if restore_managed_directory_mode(dst, *device, *inode, *mode)? {
+                            return Ok(UndoOutcome::Undone(what));
+                        }
+                        return Ok(UndoOutcome::Skipped(format!(
+                            "asset '{name}' at {} changed while restoring its mode",
+                            dst.display()
+                        )));
+                    }
+                    // A failed backup rename leaves the original destination
+                    // in place and creates no backup. The install never
+                    // reached placement, so rollback has already converged.
+                    return Ok(UndoOutcome::Converged);
+                }
                 let retained = match previous {
                     PreviousState::Backed { backup, .. } if backup.exists() => {
                         format!(" (previous contents retained at {})", backup.display())
@@ -653,27 +742,44 @@ fn undo_asset_install(
                 )));
             }
             let what = format!("remove installed asset '{name}' at {}", dst.display());
+            if let PreviousState::Backed { backup, .. } = previous
+                && !backup.exists()
+            {
+                return Ok(UndoOutcome::MissingBackup(format!(
+                    "cannot restore {}: backup {} is missing; installed payload left in place",
+                    dst.display(),
+                    backup.display()
+                )));
+            }
             if !act {
                 return Ok(UndoOutcome::WouldUndo(what));
             }
+            make_tree_removable(dst)?;
             remove_path(dst)
                 .with_context(|| format!("remove installed asset {}", dst.display()))?;
             match previous {
-                PreviousState::Backed { backup, .. } => {
-                    match restore_backup_to(backup, dst, act)? {
-                        UndoOutcome::Undone(_) | UndoOutcome::Converged => Ok(UndoOutcome::Undone(
-                            format!("{what}; previous contents restored"),
-                        )),
-                        other => Ok(other),
-                    }
-                }
+                PreviousState::Backed {
+                    backup,
+                    original_mode,
+                    ..
+                } => match restore_backup_to(backup, dst, *original_mode, act)? {
+                    UndoOutcome::Undone(_) | UndoOutcome::Converged => Ok(UndoOutcome::Undone(
+                        format!("{what}; previous contents restored"),
+                    )),
+                    other => Ok(other),
+                },
                 _ => Ok(UndoOutcome::Undone(what)),
             }
         }
     }
 }
 
-fn restore_backup_to(backup: &Path, dst: &Path, act: bool) -> Result<UndoOutcome> {
+fn restore_backup_to(
+    backup: &Path,
+    dst: &Path,
+    original_mode: Option<u32>,
+    act: bool,
+) -> Result<UndoOutcome> {
     if !backup.exists() {
         return Ok(UndoOutcome::MissingBackup(format!(
             "cannot restore {}: backup {} is missing",
@@ -685,7 +791,8 @@ fn restore_backup_to(backup: &Path, dst: &Path, act: bool) -> Result<UndoOutcome
     if !act {
         return Ok(UndoOutcome::WouldUndo(what));
     }
-    move_path(backup, dst).with_context(|| format!("restore backup to {}", dst.display()))?;
+    move_managed_tree(backup, dst, original_mode)
+        .with_context(|| format!("restore backup to {}", dst.display()))?;
     Ok(UndoOutcome::Undone(what))
 }
 
@@ -708,6 +815,8 @@ fn replace_with_symlink(target: &Path, dst: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::fs::util::copy_recursive;
+    use std::os::unix::fs::PermissionsExt;
 
     /// Asset-removal rollback prefers the exact quarantined bytes over
     /// reinstalling the CAS payload.
@@ -720,7 +829,17 @@ mod tests {
         let dst = dir.path().join("deployed/asset");
         let payload = dir.path().join("cas/does-not-exist");
 
-        let outcome = undo_asset_remove("demo", &dst, &payload, Some(&quarantine), true).unwrap();
+        let outcome = undo_asset_remove(
+            "demo",
+            &dst,
+            &payload,
+            Some(&quarantine),
+            None,
+            None,
+            None,
+            true,
+        )
+        .unwrap();
         assert!(matches!(outcome, UndoOutcome::Undone(_)));
         assert_eq!(fs::read(dst.join("file")).unwrap(), b"exact bytes");
         assert!(fs::symlink_metadata(&quarantine).is_err());
@@ -734,7 +853,108 @@ mod tests {
         let dst = dir.path().join("deployed/asset");
         let payload = dir.path().join("cas/does-not-exist");
 
-        let outcome = undo_asset_remove("demo", &dst, &payload, None, true).unwrap();
+        let outcome =
+            undo_asset_remove("demo", &dst, &payload, None, None, None, None, true).unwrap();
         assert!(matches!(outcome, UndoOutcome::MissingBackup(_)));
+    }
+
+    #[test]
+    fn failed_pre_backup_asset_install_is_already_converged() {
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("deployed/asset");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("original"), b"old").unwrap();
+        let payload = dir.path().join("cas/sha256-not-the-original");
+        fs::create_dir_all(&payload).unwrap();
+        fs::write(payload.join("new"), b"new").unwrap();
+        let previous = PreviousState::Backed {
+            backup: dir.path().join("backups/missing"),
+            path_kind: crate::state::transaction::PathKind::Directory,
+            original_mode: Some(0o755),
+            original_device: None,
+            original_inode: None,
+        };
+
+        let outcome = undo_asset_install("demo", &dst, &payload, &previous, true).unwrap();
+
+        assert!(matches!(outcome, UndoOutcome::Converged));
+        assert_eq!(fs::read(dst.join("original")).unwrap(), b"old");
+    }
+
+    #[test]
+    fn recovery_never_removes_payload_before_confirming_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let source = dir.path().join("source");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("new"), b"new").unwrap();
+        let hash = tree_hash(&source).unwrap();
+        let payload = dir.path().join("cas").join(hash);
+        fs::create_dir_all(payload.parent().unwrap()).unwrap();
+        fs::rename(&source, &payload).unwrap();
+        let dst = dir.path().join("deployed/asset");
+        copy_recursive(&payload, &dst).unwrap();
+        let previous = PreviousState::Backed {
+            backup: dir.path().join("backups/missing"),
+            path_kind: crate::state::transaction::PathKind::Directory,
+            original_mode: Some(0o755),
+            original_device: None,
+            original_inode: None,
+        };
+
+        let outcome = undo_asset_install("demo", &dst, &payload, &previous, true).unwrap();
+
+        assert!(matches!(outcome, UndoOutcome::MissingBackup(_)));
+        assert_eq!(fs::read(dst.join("new")).unwrap(), b"new");
+    }
+
+    #[test]
+    fn recovery_reseals_original_inode_after_interrupted_move() {
+        let dir = tempfile::tempdir().unwrap();
+        let dst = dir.path().join("deployed/asset");
+        fs::create_dir_all(&dst).unwrap();
+        fs::write(dst.join("original"), b"old").unwrap();
+        let identity = fs::symlink_metadata(&dst).unwrap();
+        let payload = dir.path().join("cas/sha256-not-the-original");
+        fs::create_dir_all(&payload).unwrap();
+        fs::write(payload.join("new"), b"new").unwrap();
+        let previous = PreviousState::Backed {
+            backup: dir.path().join("backups/missing"),
+            path_kind: crate::state::transaction::PathKind::Directory,
+            original_mode: Some(0o555),
+            original_device: Some(identity.dev()),
+            original_inode: Some(identity.ino()),
+        };
+
+        let outcome = undo_asset_install("demo", &dst, &payload, &previous, true).unwrap();
+
+        assert!(matches!(outcome, UndoOutcome::Undone(_)));
+        assert_eq!(
+            fs::symlink_metadata(&dst).unwrap().permissions().mode() & 0o777,
+            0o555
+        );
+        make_tree_removable(dir.path()).unwrap();
+    }
+
+    #[test]
+    fn restoring_symlink_backup_does_not_chmod_its_referent() {
+        let dir = tempfile::tempdir().unwrap();
+        let referent = dir.path().join("referent");
+        fs::write(&referent, b"private").unwrap();
+        fs::set_permissions(&referent, fs::Permissions::from_mode(0o600)).unwrap();
+        let backup = dir.path().join("backup");
+        std::os::unix::fs::symlink(&referent, &backup).unwrap();
+        let dst = dir.path().join("restored");
+
+        restore_backup_to(&backup, &dst, None, true).unwrap();
+
+        assert!(fs::symlink_metadata(&dst).unwrap().file_type().is_symlink());
+        assert_eq!(
+            fs::symlink_metadata(&referent)
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 }

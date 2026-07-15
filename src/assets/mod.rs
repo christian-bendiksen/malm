@@ -9,4 +9,4 @@ pub mod parser;
 
 pub use download::{download_archive, extract_archive};
 pub use installed_check::installed_check_satisfied;
-pub use model::{ArchiveFormat, AssetConfig, AssetEntry, AssetManifest};
+pub use model::{ArchiveFormat, AssetConfig, AssetDeclaration, AssetEntry, AssetManifest};

@@ -1,6 +1,7 @@
 //! Transaction manifest and recovery state. Recovery rolls forward at or after
 //! `FilesystemApplied` and rolls back before it.
 
+use crate::assets::AssetDeclaration;
 use crate::config::ConfigFileProvenance;
 use crate::domain::id::{ObjectId, TransactionId};
 use crate::domain::owner::OwnerKind;
@@ -48,6 +49,8 @@ pub struct DesiredAsset {
     pub source: PathBuf,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub declaration: Option<AssetDeclaration>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,6 +155,12 @@ pub enum PreviousState {
         backup: PathBuf,
         #[serde(default)]
         path_kind: PathKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_mode: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_device: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_inode: Option<u64>,
     },
     Symlink {
         old_target: PathBuf,
@@ -195,6 +204,8 @@ pub enum RecordedOp {
         payload: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         archive_sha256: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        declaration: Option<AssetDeclaration>,
     },
     /// An asset removed by disable or destroy. `payload` is the CAS object
     /// verified at `dst` before removal, so rollback can reinstall it.
@@ -207,6 +218,12 @@ pub enum RecordedOp {
         payload: PathBuf,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         quarantine: Option<PathBuf>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_mode: Option<u32>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_device: Option<u64>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        original_inode: Option<u64>,
     },
 }
 
@@ -461,12 +478,16 @@ impl TransactionManifest {
         self.operations.len() - 1
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_remove_asset_started(
         &mut self,
         name: String,
         dst: PathBuf,
         payload: PathBuf,
         quarantine: PathBuf,
+        original_mode: Option<u32>,
+        original_device: Option<u64>,
+        original_inode: Option<u64>,
     ) -> usize {
         self.operations.push(RecordedOp::RemoveAsset {
             status: OperationStatus::Started,
@@ -474,10 +495,14 @@ impl TransactionManifest {
             dst,
             payload,
             quarantine: Some(quarantine),
+            original_mode,
+            original_device,
+            original_inode,
         });
         self.operations.len() - 1
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn record_asset_started(
         &mut self,
         name: String,
@@ -485,6 +510,7 @@ impl TransactionManifest {
         dst: PathBuf,
         payload: PathBuf,
         archive_sha256: Option<String>,
+        declaration: Option<AssetDeclaration>,
         previous: PreviousState,
     ) -> usize {
         self.operations.push(RecordedOp::InstallAsset {
@@ -495,6 +521,7 @@ impl TransactionManifest {
             previous,
             payload,
             archive_sha256,
+            declaration,
         });
         self.operations.len() - 1
     }

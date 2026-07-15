@@ -1,6 +1,7 @@
 //! Ownership index model: which targets a state manages, from which
 //! sources, with declaration and transaction provenance.
 
+use crate::assets::AssetDeclaration;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -16,6 +17,8 @@ pub struct OwnershipEntry {
     pub owner: OwnerKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub transaction: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub asset_declaration: Option<AssetDeclaration>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
