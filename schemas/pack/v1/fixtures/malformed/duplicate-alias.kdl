@@ -1,0 +1,15 @@
+pack schema-version=1 package-id="com.example.invalid" {
+    modules {}
+    dependencies {
+        dependency "common" package-id="com.example.one" {
+            local workspace-path="packs/one"
+        }
+        dependency "common" package-id="com.example.two" {
+            local workspace-path="packs/two"
+        }
+    }
+    templates {}
+    schemas {}
+    assets {}
+    components {}
+}

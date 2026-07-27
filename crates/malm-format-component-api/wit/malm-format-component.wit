@@ -1,0 +1,167 @@
+package malm:format-component@1.0.0;
+
+world malm-format-component {
+    type value-id = u32;
+
+    record value-field-v1 {
+        name: string,
+        value: value-id,
+    }
+
+    variant typed-value-v1 {
+        null-value,
+        boolean(bool),
+        signed(s64),
+        unsigned(u64),
+        floating-point(f64),
+        text(string),
+        path(string),
+        list-value(list<value-id>),
+        record-value(list<value-field-v1>),
+        collection-value(list<value-field-v1>),
+    }
+
+    record canonical-value-v1 {
+        root: value-id,
+        values: list<typed-value-v1>,
+    }
+
+    record document-id-v1 {
+        authority-label: string,
+        authority-identity: string,
+        path: string,
+    }
+
+    record source-document-v1 {
+        id: document-id-v1,
+        digest: string,
+        byte-len: u64,
+    }
+
+    record source-range-v1 {
+        start: u32,
+        end: u32,
+    }
+
+    record source-location-v1 {
+        document: document-id-v1,
+        range: source-range-v1,
+    }
+
+    variant document-edge-kind-v1 {
+        include-edge,
+        module-edge(string),
+    }
+
+    record include-provenance-v1 {
+        source: source-location-v1,
+        target: document-id-v1,
+        target-digest: string,
+        dependency-alias: option<string>,
+        edge-kind: document-edge-kind-v1,
+    }
+
+    record loop-frame-v1 {
+        binding: string,
+        iteration: u32,
+    }
+
+    variant evaluation-frame-v1 {
+        fragment(string),
+        conditional(bool),
+        loop-frame(loop-frame-v1),
+    }
+
+    variant provenance-operation-v1 {
+        variable-supplied,
+        variable-default,
+        variable-optional-absent,
+        variable-computed,
+        emit,
+        patch(u32),
+    }
+
+    record provenance-record-v1 {
+        sequence: u64,
+        location: source-location-v1,
+        operation: provenance-operation-v1,
+        frames: list<evaluation-frame-v1>,
+    }
+
+    record value-provenance-v1 {
+        path: list<string>,
+        records: list<provenance-record-v1>,
+    }
+
+    record canonical-typed-document-v1 {
+        version: u32,
+        root: canonical-value-v1,
+        source-documents: list<source-document-v1>,
+        includes: list<include-provenance-v1>,
+        provenance: list<value-provenance-v1>,
+    }
+
+    record transform-option-v1 {
+        name: string,
+        value: canonical-value-v1,
+    }
+
+    record declared-resource-v1 {
+        name: string,
+        digest: string,
+        bytes: list<u8>,
+    }
+
+    record transform-request-v1 {
+        contract-version: u32,
+        document: canonical-typed-document-v1,
+        options: list<transform-option-v1>,
+        resources: list<declared-resource-v1>,
+    }
+
+    enum diagnostic-severity-v1 {
+        error,
+        warning,
+        info,
+    }
+
+    record output-range-v1 {
+        start: u64,
+        end: u64,
+    }
+
+    variant diagnostic-location-v1 {
+        source(source-location-v1),
+        output(output-range-v1),
+    }
+
+    record diagnostic-v1 {
+        severity: diagnostic-severity-v1,
+        code: string,
+        message: string,
+        primary: option<diagnostic-location-v1>,
+        notes: list<string>,
+    }
+
+    record transform-response-v1 {
+        output: list<u8>,
+        media-type: string,
+        diagnostics: list<diagnostic-v1>,
+    }
+
+    enum transform-failure-kind-v1 {
+        invalid-request,
+        unsupported-format,
+        resource-limit,
+        invalid-result,
+        internal,
+    }
+
+    record transform-failure-v1 {
+        kind: transform-failure-kind-v1,
+        message: string,
+        diagnostics: list<diagnostic-v1>,
+    }
+
+    export transform: func(request: transform-request-v1) -> result<transform-response-v1, transform-failure-v1>;
+}

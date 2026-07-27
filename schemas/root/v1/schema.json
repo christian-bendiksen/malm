@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://malm.dev/schemas/root/v1/schema.json",
+  "title": "Malm final-root descriptor v1",
+  "type": "object",
+  "required": ["format", "version"],
+  "properties": {
+    "format": {
+      "type": "string",
+      "const": "malm-state"
+    },
+    "version": {
+      "type": "integer",
+      "const": 1
+    }
+  },
+  "additionalProperties": false,
+  "minProperties": 2,
+  "maxProperties": 2
+}

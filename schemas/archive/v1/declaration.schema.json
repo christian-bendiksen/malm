@@ -1,0 +1,29 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://malm.dev/schemas/archive/v1/declaration.schema.json",
+  "title": "Malm archive/v1 declaration",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "container",
+    "compression",
+    "decoder_version",
+    "payload_byte_len",
+    "payload_digest"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "container": { "const": "tar" },
+    "compression": { "const": "none" },
+    "decoder_version": { "const": 1 },
+    "payload_byte_len": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "payload_digest": {
+      "type": "string",
+      "pattern": "^sha256-[0-9a-f]{64}$"
+    }
+  }
+}

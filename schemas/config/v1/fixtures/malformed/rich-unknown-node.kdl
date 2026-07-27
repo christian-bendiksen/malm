@@ -1,0 +1,25 @@
+rich-config schema-version=1 default-profile="main" {
+    includes {
+    }
+    modules {
+    }
+    variables {
+    }
+    fragments {
+    }
+    slots {
+    }
+    statements {
+        execute-command "forbidden"
+    }
+    profiles {
+        profile "main" abstract=#false {
+            extends {
+            }
+            statements {
+            }
+            outputs {
+            }
+        }
+    }
+}

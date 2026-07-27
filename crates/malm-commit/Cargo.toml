@@ -1,0 +1,25 @@
+[package]
+name = "malm-commit"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+failpoints = []
+
+[dependencies]
+malm-root = { path = "../malm-root" }
+malm-store = { path = "../malm-store" }
+malm-types = { path = "../malm-types" }
+rustix = { version = "1", features = ["fs"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "^3.27"
+
+[lints]
+workspace = true

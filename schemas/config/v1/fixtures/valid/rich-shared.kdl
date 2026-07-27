@@ -1,0 +1,130 @@
+rich-config schema-version=1 {
+    includes {
+    }
+    modules {
+    }
+    variables {
+        input "theme" optional=#false {
+            type "string"
+            default {
+                string "dark"
+            }
+        }
+        input "settings-input" optional=#false {
+            type "record" {
+                field "ports" optional=#false {
+                    type "collection" {
+                        item-type {
+                            type "unsigned"
+                        }
+                    }
+                    default {
+                        collection {
+                            item "main" {
+                                unsigned 8080
+                            }
+                        }
+                    }
+                }
+                field "tags" optional=#false {
+                    type "list" {
+                        item-type {
+                            type "string"
+                        }
+                    }
+                    default {
+                        list {
+                            item {
+                                string "base"
+                            }
+                        }
+                    }
+                }
+                field "title" optional=#false {
+                    type "string"
+                    default {
+                        string "Malm"
+                    }
+                }
+            }
+            default {
+                record {
+                }
+            }
+        }
+        let "enabled" {
+            type "bool"
+            expression {
+                bool #true
+            }
+        }
+        let "source-items" {
+            type "collection" {
+                item-type {
+                    type "integer"
+                }
+            }
+            expression {
+                collection {
+                    item "z" {
+                        integer 26
+                    }
+                    item "a" {
+                        integer 1
+                    }
+                }
+            }
+        }
+    }
+    fragments {
+        fragment "base-document" {
+            statements {
+                emit "text" {
+                    value {
+                        string "hello from rich config"
+                    }
+                }
+                emit "settings" {
+                    value {
+                        variable "settings-input"
+                    }
+                }
+                emit "sequence" {
+                    value {
+                        list {
+                        }
+                    }
+                }
+                emit "items" {
+                    value {
+                        collection {
+                        }
+                    }
+                }
+            }
+        }
+    }
+    slots {
+        slot "config-provider" max=2
+    }
+    statements {
+        emit "origin" {
+            value {
+                string "shared"
+            }
+        }
+    }
+    profiles {
+        profile "base" abstract=#true {
+            extends {
+            }
+            statements {
+                compose "base-document"
+            }
+            outputs {
+                regular-file "settings-file" destination=".config/app/config.txt" source="assets/settings.txt" source-kind="asset" raw-digest="sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" object-digest="sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" byte-len=3 executable=#false slot="config-provider"
+                canonical-tree "shared-tree" destination=".local/share/app-tree" digest="sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        }
+    }
+}

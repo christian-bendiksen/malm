@@ -1,0 +1,56 @@
+deploy
+source
+source check
+source render
+source vars
+source lock
+source lock create
+source lock update
+plan
+plan create
+plan track
+plan refresh
+plan switch-profile
+plan restore
+plan disable
+plan enable
+plan remove
+plan retention
+plan retention set-history
+plan retention pin
+plan retention unpin
+plan retention restore-point
+plan retention restore-point add
+plan retention restore-point drop
+plan list
+plan show
+plan apply
+plan delete
+plan inputs
+plan transforms
+plan artifact
+plan artifact list
+plan artifact show
+plan artifact export
+namespace
+namespace list
+namespace show
+namespace status
+namespace history
+namespace generation
+namespace generation show
+namespace generation desired
+namespace generation retention
+namespace generation tracking
+store
+store status
+store init
+store verify
+store recover
+store gc
+object
+object tree
+object tree show
+component
+component host-profile
+machine

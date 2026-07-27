@@ -1,0 +1,18 @@
+[package]
+name = "malm-machine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+malm-types = { path = "../malm-types" }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+jsonschema = { version = "=0.48.1", default-features = false }
+
+[lints]
+workspace = true

@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "root_node_id": "sha256-cdb0f1f04bee93ada896f2c165505408a7b616d90c2c5cf450b64473766247bc",
+  "nodes": [
+    {
+      "node_id": "sha256-3a96002fe2c04131d877f6aa12aa9672639dd5638590adb3d8e85ae7c8cd4999",
+      "package_id": "com.example.common",
+      "source": {
+        "kind": "local",
+        "locator": "packs/common"
+      },
+      "content_digest": "sha256-3963a7ff923ed8113d8a878ee634524d4857c7dd9f73dee5e40b0d131bc70c6c",
+      "dependencies": [],
+      "components": []
+    },
+    {
+      "node_id": "sha256-cdb0f1f04bee93ada896f2c165505408a7b616d90c2c5cf450b64473766247bc",
+      "package_id": "com.example.root",
+      "source": {
+        "kind": "root"
+      },
+      "content_digest": "sha256-b67515c3aa3c900df37b32c6439c3f2b12e0067cb8e598302d4f60237ddd3ef6",
+      "dependencies": [
+        {
+          "alias": "common",
+          "target_node_id": "sha256-3a96002fe2c04131d877f6aa12aa9672639dd5638590adb3d8e85ae7c8cd4999"
+        }
+      ],
+      "components": []
+    }
+  ]
+}

@@ -1,0 +1,127 @@
+rich-config schema-version=1 default-profile="desktop" {
+    includes {
+        include path="rich-shared.kdl"
+    }
+    modules {
+    }
+    variables {
+        let "profile-label" {
+            type "string"
+            expression {
+                if-value {
+                    condition {
+                        equal negated=#false {
+                            left {
+                                variable "theme"
+                            }
+                            right {
+                                string "dark"
+                            }
+                        }
+                    }
+                    then {
+                        string "night"
+                    }
+                    else {
+                        string "day"
+                    }
+                }
+            }
+        }
+    }
+    fragments {
+    }
+    slots {
+    }
+    statements {
+        emit "profile-label" {
+            value {
+                variable "profile-label"
+            }
+        }
+    }
+    profiles {
+        profile "desktop" abstract=#false {
+            extends {
+                profile "base"
+            }
+            statements {
+                when {
+                    condition {
+                        boolean {
+                            value {
+                                variable "enabled"
+                            }
+                        }
+                    }
+                    then {
+                        emit "mode" {
+                            value {
+                                string "enabled"
+                            }
+                        }
+                    }
+                    else {
+                        emit "mode" {
+                            value {
+                                string "disabled"
+                            }
+                        }
+                    }
+                }
+                for-range "number" from=1 through=3 {
+                    do {
+                        patch {
+                            list-append path="sequence" {
+                                value {
+                                    variable "number"
+                                }
+                            }
+                        }
+                    }
+                }
+                for-each "item-value" key-binding="item-key" {
+                    iterable {
+                        variable "source-items"
+                    }
+                    do {
+                        patch {
+                            collection-insert path="items" {
+                                key {
+                                    variable "item-key"
+                                }
+                                value {
+                                    variable "item-value"
+                                }
+                            }
+                        }
+                    }
+                }
+                patch {
+                    set path="settings.title" {
+                        value {
+                            string "Configured"
+                        }
+                    }
+                    collection-replace path="items" {
+                        key {
+                            string "a"
+                        }
+                        value {
+                            integer 10
+                        }
+                    }
+                    collection-remove path="items" optional=#true {
+                        key {
+                            string "missing"
+                        }
+                    }
+                }
+            }
+            outputs {
+                symlink "settings-link" destination=".config/app-link" target="app/config.txt" slot="config-provider"
+                decoded-archive "archive-tree" destination=".local/share/archive-tree" source="assets/archive.tar" source-kind="asset" raw-digest="sha256-ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" object-digest="sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" byte-len=3 decoder="malm.posix-ustar.none" decoder-version=1 tree-digest="sha256-e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            }
+        }
+    }
+}

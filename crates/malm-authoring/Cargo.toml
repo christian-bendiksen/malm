@@ -1,0 +1,17 @@
+[package]
+name = "malm-authoring"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+kdl = { version = "=6.5.0", features = ["v1"] }
+malm-config = { path = "../malm-config" }
+malm-pack = { path = "../malm-pack" }
+malm-types = { path = "../malm-types" }
+serde_json.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

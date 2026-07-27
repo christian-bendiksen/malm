@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "declaration": {
+    "schema_version": 1,
+    "container": "tar",
+    "compression": "none",
+    "decoder_version": 1,
+    "payload_byte_len": 1024,
+    "payload_digest": "sha256-5f70bf18a086007016e948b04aed3b82103a36bea41755b6cddfaf10ace3c6ef"
+  },
+  "decoder": {
+    "name": "external.tar",
+    "version": 1
+  },
+  "root_digest": "sha256-db2672099b1e1cbf7f52b577839f034d36cb767b79a94b01890254bbdc1eb85f"
+}

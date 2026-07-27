@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"store.status","outcome":"ok","data":{"path":"/home/example/.local/state/malm","status":"ready"},"diagnostics":[]}

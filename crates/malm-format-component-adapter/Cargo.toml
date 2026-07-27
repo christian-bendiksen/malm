@@ -1,0 +1,16 @@
+[package]
+name = "malm-format-component-adapter"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+malm-config = { path = "../malm-config" }
+malm-engine = { path = "../malm-engine" }
+malm-format-component-api = { path = "../malm-format-component-api" }
+malm-format-component-host = { path = "../malm-format-component-host" }
+malm-types = { path = "../malm-types" }
+
+[lints]
+workspace = true

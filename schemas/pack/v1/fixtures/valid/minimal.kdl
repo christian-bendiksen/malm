@@ -1,0 +1,16 @@
+pack schema-version=1 package-id="com.example.minimal" {
+    modules {
+    }
+    config-documents {
+    }
+    dependencies {
+    }
+    templates {
+    }
+    schemas {
+    }
+    assets {
+    }
+    components {
+    }
+}

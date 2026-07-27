@@ -1,0 +1,8 @@
+(manifest)pack schema-version=1 package-id="com.example.invalid" {
+    modules {}
+    dependencies {}
+    templates {}
+    schemas {}
+    assets {}
+    components {}
+}

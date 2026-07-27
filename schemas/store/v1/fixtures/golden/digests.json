@@ -1,0 +1,12 @@
+{
+  "golden": {
+    "prepared_record": "pp-db8c8af615fea0f1b9c4baca9c98abc5bae233be25f3fa3d99d8079732f9caf9",
+    "state_catalog": "sha256-303331abcd3e223e2a28821212d5b92879c249ab53a8a5a2f761eb278679fbf4",
+    "state_generation": "sha256-0baac37abc5d001caf2ca8049e1d9bc070ba420be017f05f0c99100ee69f700a"
+  },
+  "valid": {
+    "prepared_record": "pp-668a420a48679a0e5bb16d04bc651c97fec64c1aa7d297105833f86ea7605ae5",
+    "state_catalog": "sha256-45fcdf4a59560cb1a6d71ac2542ea3c9a6bd139f3b8e32b90f0ea7581d489a2b",
+    "state_generation": "sha256-dca76d52bd160e1a029e679f3bb9f5b160a6dbd1770c64cb6c805b664771d2d4"
+  }
+}

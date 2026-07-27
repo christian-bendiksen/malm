@@ -1,0 +1,28 @@
+pack schema-version=1 package-id=com.example.desktop {
+    modules {
+        module terminal path="modules/terminal.kdl"
+    }
+    config-documents {
+        document "config/desktop.kdl"
+    }
+    dependencies {
+        dependency common package-id=com.example.common {
+            local workspace-path="packs/common"
+        }
+        dependency theme package-id=org.example.theme {
+            git url="https://example.org/theme.git" commit=sha1-0123456789abcdef0123456789abcdef01234567 subdir=.
+        }
+    }
+    templates {
+        template "templates/settings.toml"
+    }
+    schemas {
+        schema "schemas/settings.schema.json"
+    }
+    assets {
+        asset "assets/logo.svg"
+    }
+    components {
+        component settings-formatter path="components/settings.wasm" digest=sha256-0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef interface="format-component/v1"
+    }
+}

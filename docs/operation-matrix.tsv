@@ -1,0 +1,46 @@
+cli_operation	cli_engine_operations	machine_operation	machine_engine_operations	class
+deploy	prepare_static_deployment_v1,commit_v1	none	none	mutation-write
+source check	none	none	none	read-only-inspection
+source render	none	none	none	host-write-export
+source vars	none	none	none	read-only-inspection
+source lock create	create_lock_v1	none	none	lock-with-acquisition
+source lock update	update_lock_v1	none	none	lock-with-acquisition
+plan create	prepare_static_deployment_v1	prepare	prepare_v1	prepare-with-acquisition
+plan track	prepare_tracked_root_v1	none	none	prepare-with-acquisition
+plan refresh	update_tracked_root_v1	none	none	prepare-with-acquisition
+plan switch-profile	prepare_profile_switch_v1	none	none	prepare-only
+plan restore	prepare_checkout_v1,inspect_generation_inventory_v1	checkout	prepare_checkout_v1	prepare-only
+plan disable	prepare_disable_v1	disable	prepare_disable_v1	prepare-only
+plan enable	prepare_enable_v1	enable	prepare_enable_v1	prepare-only
+plan remove	prepare_namespace_removal_v1	remove_namespace	prepare_namespace_removal_v1	prepare-only
+plan retention set-history	prepare_retention_authority_v1	set_history_retention	prepare_retention_authority_v1	prepare-only
+plan retention pin	prepare_retention_authority_v1,inspect_plan_index_v1,inspect_generation_inventory_v1,inspect_object_inventory_v1	pin	prepare_retention_authority_v1	prepare-only
+plan retention unpin	prepare_retention_authority_v1,inspect_plan_index_v1,inspect_generation_inventory_v1,inspect_object_inventory_v1	unpin	prepare_retention_authority_v1	prepare-only
+plan retention restore-point add	prepare_retention_authority_v1,inspect_generation_inventory_v1	add_restore_point	prepare_retention_authority_v1	prepare-only
+plan retention restore-point drop	prepare_retention_authority_v1,inspect_generation_inventory_v1	drop_restore_point	prepare_retention_authority_v1	prepare-only
+plan list	inspect_plan_index_v1,inspect_plan_v1	none	none	read-only-inspection
+plan show	inspect_plan_v1,inspect_plan_index_v1	plan	inspect_plan_v1	read-only-inspection
+plan apply	commit_v1,inspect_plan_v1,inspect_plan_index_v1	commit	commit_v1	mutation-write
+plan delete	prune_v1,inspect_plan_index_v1	prune	prune_v1	mutation-write
+plan inputs	inspect_captured_inputs_v1,inspect_plan_index_v1	captured_inputs	inspect_captured_inputs_v1	read-only-inspection
+plan transforms	inspect_transform_provenance_v1,inspect_plan_index_v1	transform_provenance	inspect_transform_provenance_v1	read-only-inspection
+plan artifact list	inspect_plan_v1,inspect_plan_index_v1	none	none	read-only-inspection
+plan artifact show	inspect_artifact_metadata_v1,inspect_plan_index_v1	artifact_metadata	inspect_artifact_metadata_v1	read-only-inspection
+plan artifact export	load_artifact_v1,inspect_plan_index_v1	artifact	load_artifact_v1	host-write-export
+namespace list	inspect_catalog_v1	catalog	inspect_catalog_v1	read-only-inspection
+namespace show	inspect_namespace_v1	namespace	inspect_namespace_v1	read-only-inspection
+namespace status	inspect_namespace_status_v1	status	inspect_namespace_status_v1	read-only-inspection
+namespace history	inspect_namespace_history_v1	history	inspect_namespace_history_v1	read-only-inspection
+namespace generation show	inspect_generation_v1,inspect_generation_inventory_v1	generation	inspect_generation_v1	read-only-inspection
+namespace generation desired	inspect_desired_snapshot_v1,inspect_generation_inventory_v1	desired_snapshot	inspect_desired_snapshot_v1	read-only-inspection
+namespace generation retention	inspect_retention_v1,inspect_generation_inventory_v1	retention	inspect_retention_v1	read-only-inspection
+namespace generation tracking	inspect_tracking_v1,inspect_generation_inventory_v1	tracking	inspect_tracking_v1	read-only-inspection
+store status	store_status	store_status	store_status	read-only-inspection
+store init	initialize_store	initialize_store	initialize_store	mutation-write
+store verify	fsck_v1	fsck	fsck_v1	read-only-inspection
+store recover	recover_v1	recover	recover_v1	mutation-write
+store gc	prune_v1,inspect_plan_index_v1	none	none	mutation-write
+object tree show	inspect_canonical_tree_v1,inspect_object_inventory_v1	canonical_tree	inspect_canonical_tree_v1	read-only-inspection
+component host-profile	none	none	none	read-only-inspection
+machine	request-dependent	request-dependent	request-dependent	request-dependent
+none	none	state	inspect_state_v1	none

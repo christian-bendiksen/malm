@@ -1,0 +1,1 @@
+{"schema_version":1,"command":"plan.apply","outcome":"error","data":null,"diagnostics":[],"error":{"category":"conflict","code":"stale-plan","message":"The plan is stale.","help":"Create a fresh plan."}}

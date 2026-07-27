@@ -1,0 +1,14 @@
+[package]
+name = "malm-module-graph"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+malm-pack = { path = "../malm-pack" }
+malm-types = { path = "../malm-types" }
+thiserror.workspace = true
+
+[lints]
+workspace = true

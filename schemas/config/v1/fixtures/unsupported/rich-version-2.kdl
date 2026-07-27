@@ -1,0 +1,16 @@
+rich-config schema-version=2 {
+    includes {
+    }
+    modules {
+    }
+    variables {
+    }
+    fragments {
+    }
+    slots {
+    }
+    statements {
+    }
+    profiles {
+    }
+}

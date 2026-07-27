@@ -1,0 +1,1150 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://malm.invalid/schemas/machine/v1/server.schema.json",
+  "title": "Malm machine/v1 server record",
+  "oneOf": [
+    { "$ref": "#/$defs/eventEnvelope" },
+    { "$ref": "#/$defs/resultEnvelope" },
+    { "$ref": "#/$defs/errorEnvelope" }
+  ],
+  "$defs": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 0,
+      "maximum": 9007199254740991
+    },
+    "operation": {
+      "enum": ["store_status", "initialize_store", "prepare", "plan", "artifact", "commit", "state", "recover", "prune", "checkout", "disable", "enable", "remove_namespace", "set_history_retention", "pin", "unpin", "add_restore_point", "drop_restore_point", "catalog", "namespace", "history", "generation", "desired_snapshot", "canonical_tree", "artifact_metadata", "captured_inputs", "transform_provenance", "retention", "tracking", "status", "fsck"]
+    },
+    "status": {
+      "enum": ["absent", "uninitialized", "ready"]
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 65536,
+      "pattern": "^[^\\u0000-\\u0008\\u000B-\\u001F\\u007F-\\u009F]*$"
+    },
+    "eventEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "sequence", "type", "event"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "sequence": { "const": 0 },
+        "type": { "const": "event" },
+        "event": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["type", "operation"],
+          "properties": {
+            "type": { "const": "started" },
+            "operation": { "$ref": "#/$defs/operation" }
+          }
+        }
+      }
+    },
+    "resultEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "sequence", "type", "result"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "type": { "const": "result" },
+        "result": {
+          "oneOf": [
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "status"],
+              "properties": {
+                "type": { "const": "store_status" },
+                "status": { "$ref": "#/$defs/status" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "status"],
+              "properties": {
+                "type": { "const": "initialize_store" },
+                "status": { "const": "ready" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "deployment"],
+              "properties": {
+                "type": { "const": "prepare" },
+                "deployment": { "$ref": "#/$defs/preparedDeployment" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "deployment"],
+              "properties": {
+                "type": { "const": "plan" },
+                "deployment": { "$ref": "#/$defs/preparedDeployment" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "artifact"],
+              "properties": {
+                "type": { "const": "artifact" },
+                "artifact": { "$ref": "#/$defs/artifact" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "outcome"],
+              "properties": {
+                "type": { "const": "commit" },
+                "outcome": { "$ref": "#/$defs/applyOutcome" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "state"],
+              "properties": {
+                "type": { "const": "state" },
+                "state": { "$ref": "#/$defs/stateView" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "outcome"],
+              "properties": {
+                "type": { "const": "recover" },
+                "outcome": { "$ref": "#/$defs/recoveryOutcome" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "outcome"],
+              "properties": {
+                "type": { "const": "prune" },
+                "outcome": { "$ref": "#/$defs/pruneOutcome" }
+              }
+            },
+            {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["type", "deployment"],
+              "properties": {
+                "type": { "const": "checkout" },
+                "deployment": { "$ref": "#/$defs/preparedDeployment" }
+              }
+            },
+            { "$ref": "#/$defs/lifecyclePreparedResult" },
+            { "$ref": "#/$defs/catalogResult" },
+            { "$ref": "#/$defs/namespaceResult" },
+            { "$ref": "#/$defs/historyResult" },
+            { "$ref": "#/$defs/generationResult" },
+            { "$ref": "#/$defs/desiredSnapshotResult" },
+            { "$ref": "#/$defs/canonicalTreeResult" },
+            { "$ref": "#/$defs/artifactMetadataResult" },
+            { "$ref": "#/$defs/capturedInputsResult" },
+            { "$ref": "#/$defs/transformProvenanceResult" },
+            { "$ref": "#/$defs/retentionResult" },
+            { "$ref": "#/$defs/trackingResult" },
+            { "$ref": "#/$defs/namespaceStatusResult" },
+            { "$ref": "#/$defs/fsckResult" }
+          ]
+        }
+      }
+    },
+    "digest": { "type": "string", "pattern": "^sha256-[0-9a-f]{64}$" },
+    "preparedId": { "type": "string", "pattern": "^pp-[0-9a-f]{64}$" },
+    "artifactId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "deploymentName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "namespaceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "artifactDescriptor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "digest", "byte_len", "media_type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/artifactId" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "byte_len": { "type": "integer", "minimum": 0 },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "prepareInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "digest"],
+      "properties": {
+        "kind": { "enum": ["source", "config", "lock", "component", "asset", "other"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "transformResource": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "digest"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "transformDiagnosticLocation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "authority_label", "authority_identity", "document_path", "source_byte_len", "start", "end"],
+          "properties": {
+            "kind": { "const": "source" },
+            "authority_label": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z][a-z0-9-]*$" },
+            "authority_identity": { "$ref": "#/$defs/digest" },
+            "document_path": { "$ref": "#/$defs/relativePath" },
+            "source_byte_len": { "type": "integer", "minimum": 0, "maximum": 1048576 },
+            "start": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+            "end": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "start", "end"],
+          "properties": {
+            "kind": { "const": "output" },
+            "start": { "type": "integer", "minimum": 0 },
+            "end": { "type": "integer", "minimum": 0 }
+          }
+        }
+      ]
+    },
+    "transformDiagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message", "primary", "notes"],
+      "properties": {
+        "severity": { "enum": ["warning", "info"] },
+        "code": { "type": "string", "minLength": 1, "maxLength": 128, "pattern": "^[a-z][a-z0-9_-]*(\\.[a-z][a-z0-9_-]*)*$" },
+        "message": { "type": "string", "maxLength": 16384 },
+        "primary": { "oneOf": [{ "$ref": "#/$defs/transformDiagnosticLocation" }, { "type": "null" }] },
+        "notes": { "type": "array", "maxItems": 64, "items": { "type": "string", "maxLength": 16384 } }
+      }
+    },
+    "transformImplementation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "implementation"],
+          "properties": {
+            "kind": { "const": "built-in" },
+            "implementation": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "pack_node_id", "pack_content_digest", "component_path", "component_digest", "interface_version", "execution_profile_digest"],
+          "properties": {
+            "kind": { "const": "component" },
+            "pack_node_id": { "$ref": "#/$defs/digest" },
+            "pack_content_digest": { "$ref": "#/$defs/digest" },
+            "component_path": { "type": "string", "minLength": 1, "maxLength": 4096 },
+            "component_digest": { "$ref": "#/$defs/digest" },
+            "interface_version": { "const": "format-component/v1" },
+            "execution_profile_digest": { "$ref": "#/$defs/digest" }
+          }
+        }
+      ]
+    },
+    "transformProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "implementation", "request_digest", "document_digest", "resources", "response_digest", "diagnostics"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "implementation": { "$ref": "#/$defs/transformImplementation" },
+        "request_digest": { "$ref": "#/$defs/digest" },
+        "document_digest": { "$ref": "#/$defs/digest" },
+        "resources": { "type": "array", "maxItems": 1024, "items": { "$ref": "#/$defs/transformResource" } },
+        "response_digest": { "$ref": "#/$defs/digest" },
+        "diagnostics": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/transformDiagnostic" } }
+      }
+    },
+    "policyFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "code", "message", "approval_required"],
+      "properties": {
+        "id": { "$ref": "#/$defs/digest" },
+        "code": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "approval_required": { "type": "boolean" }
+      }
+    },
+    "archiveProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload", "decoder"],
+      "properties": {
+        "payload": { "$ref": "#/$defs/digest" },
+        "decoder": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "prepareTargetState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "digest", "byte_len", "mode"],
+          "properties": {
+            "kind": { "const": "file" },
+            "digest": { "$ref": "#/$defs/digest" },
+            "byte_len": { "type": "integer", "minimum": 0 },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "mode"],
+          "properties": {
+            "kind": { "const": "directory" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "object"],
+          "properties": {
+            "kind": { "const": "symlink" },
+            "object": { "$ref": "#/$defs/digest" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "tree", "archive_provenance"],
+          "properties": {
+            "kind": { "const": "tree" },
+            "tree": { "$ref": "#/$defs/digest" },
+            "archive_provenance": {
+              "oneOf": [{ "$ref": "#/$defs/archiveProvenance" }, { "type": "null" }]
+            }
+          }
+        }
+      ]
+    },
+    "prepareOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "object", "replace_existing"],
+          "properties": {
+            "operation": { "const": "place_symlink" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "object": { "$ref": "#/$defs/digest" },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "tree", "archive_provenance", "replace_existing"],
+          "properties": {
+            "operation": { "const": "place_tree" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "tree": { "$ref": "#/$defs/digest" },
+            "archive_provenance": {
+              "oneOf": [{ "$ref": "#/$defs/archiveProvenance" }, { "type": "null" }]
+            },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "mode", "replace_existing"],
+          "properties": {
+            "operation": { "const": "ensure_directory" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "artifact_id", "mode", "replace_existing"],
+          "properties": {
+            "operation": { "const": "place_file" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "artifact_id": { "$ref": "#/$defs/artifactId" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path"],
+          "properties": {
+            "operation": { "const": "remove_leaf" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path"],
+          "properties": {
+            "operation": { "const": "assert_absent" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "state"],
+          "properties": {
+            "operation": { "const": "assert_exact" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "state": { "$ref": "#/$defs/prepareTargetState" }
+          }
+        }
+      ]
+    },
+    "lifecycleTransition": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "reconcile" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "disable" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "restore_generation"], "properties": { "kind": { "const": "enable" }, "restore_generation": { "$ref": "#/$defs/digest" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "source_generation"], "properties": { "kind": { "const": "checkout" }, "source_generation": { "$ref": "#/$defs/digest" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "const": "retention_authority" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "drops_history"], "properties": { "kind": { "const": "namespace_removal" }, "drops_history": { "type": "boolean" } } }
+      ]
+    },
+    "retentionObject": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "plan_id"], "properties": { "kind": { "const": "prepared_plan" }, "plan_id": { "$ref": "#/$defs/preparedId" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "digest"], "properties": { "kind": { "enum": ["state_generation", "artifact_blob", "pack_object", "canonical_file", "canonical_symlink", "canonical_tree"] }, "digest": { "$ref": "#/$defs/digest" } } }
+      ]
+    },
+    "restorePointInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["generation", "lifecycle", "desired_snapshot_digest", "tracked_root"],
+      "properties": {
+        "generation": { "$ref": "#/$defs/digest" },
+        "lifecycle": { "enum": ["enabled", "disabled"] },
+        "desired_snapshot_digest": { "$ref": "#/$defs/digest" },
+        "tracked_root": { "oneOf": [{ "$ref": "#/$defs/trackedRootInspection" }, { "type": "null" }] }
+      }
+    },
+    "retentionAuthorityInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["history_generations", "restore_points", "explicit_pins"],
+      "properties": {
+        "history_generations": { "type": "integer", "minimum": 1, "maximum": 65536 },
+        "restore_points": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/restorePointInspection" } },
+        "explicit_pins": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/retentionObject" } }
+      }
+    },
+    "preparedTrackingAcquisitionGrant": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "locator"],
+      "properties": {
+        "kind": { "enum": ["local_source", "git_source"] },
+        "locator": { "type": "string", "minLength": 1, "maxLength": 4096 }
+      }
+    },
+    "preparedTrackingReview": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["source_locator", "moving_selector", "applied_revision", "root_tree_digest", "source_subdir", "config_entry_point", "selected_profile", "target_authority", "acquisition_grants", "component_grants"],
+      "properties": {
+        "source_locator": { "type": "string", "minLength": 1, "maxLength": 2048, "pattern": "^https://[^@/?#]+/[^?#]+$" },
+        "moving_selector": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "applied_revision": { "type": "string", "pattern": "^(?:sha1-[0-9a-f]{40}|sha256-[0-9a-f]{64})$" },
+        "root_tree_digest": { "$ref": "#/$defs/digest" },
+        "source_subdir": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "config_entry_point": { "$ref": "#/$defs/relativePath" },
+        "selected_profile": { "type": "string", "minLength": 1, "maxLength": 63, "pattern": "^[a-z][a-z0-9-]*$" },
+        "target_authority": { "$ref": "#/$defs/deploymentName" },
+        "acquisition_grants": { "type": "array", "maxItems": 4096, "uniqueItems": true, "items": { "$ref": "#/$defs/preparedTrackingAcquisitionGrant" } },
+        "component_grants": { "type": "array", "maxItems": 4096, "uniqueItems": true, "items": { "$ref": "#/$defs/digest" } }
+      }
+    },
+    "preparedDeployment": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan_id", "namespace", "expected_head", "transition", "lifecycle", "restore_point", "retention", "tracked_root", "graph_digest", "inputs", "transforms", "artifacts", "findings", "approval_digest", "operations"],
+      "properties": {
+        "plan_id": { "$ref": "#/$defs/preparedId" },
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "expected_head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "transition": { "$ref": "#/$defs/lifecycleTransition" },
+        "lifecycle": { "enum": ["enabled", "disabled"] },
+        "restore_point": { "oneOf": [{ "$ref": "#/$defs/restorePointInspection" }, { "type": "null" }] },
+        "retention": { "$ref": "#/$defs/retentionAuthorityInspection" },
+        "tracked_root": {
+          "oneOf": [{ "$ref": "#/$defs/preparedTrackingReview" }, { "type": "null" }]
+        },
+        "graph_digest": { "$ref": "#/$defs/digest" },
+        "inputs": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareInput" } },
+        "transforms": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/transformProvenance" } },
+        "artifacts": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/artifactDescriptor" } },
+        "findings": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/policyFinding" } },
+        "approval_digest": { "$ref": "#/$defs/digest" },
+        "operations": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareOperation" } }
+      }
+    },
+    "trackedRootInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["moving_selector", "applied_revision", "root_tree_digest"],
+      "properties": {
+        "moving_selector": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "applied_revision": {
+          "type": "string",
+          "pattern": "^(?:sha1-[0-9a-f]{40}|sha256-[0-9a-f]{64})$"
+        },
+        "root_tree_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["descriptor", "bytes_hex"],
+      "properties": {
+        "descriptor": { "$ref": "#/$defs/artifactDescriptor" },
+        "bytes_hex": { "type": "string", "pattern": "^(?:[0-9a-f]{2})*$" }
+      }
+    },
+    "applyOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["plan_id", "namespace", "previous_head", "head"],
+      "properties": {
+        "plan_id": { "$ref": "#/$defs/preparedId" },
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "previous_head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+      }
+    },
+    "stateView": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "head"],
+      "properties": {
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+      }
+    },
+    "recoveryOutcome": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status"],
+          "properties": { "status": { "const": "no_transaction" } }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["status", "namespace", "head"],
+          "properties": {
+            "status": { "const": "recovered" },
+            "namespace": { "$ref": "#/$defs/namespaceName" },
+            "head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }
+          }
+        }
+      ]
+    },
+    "pruneOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["prepared_records", "artifact_blobs", "state_generations", "pack_objects", "canonical_files", "canonical_symlinks", "canonical_trees"],
+      "properties": {
+        "prepared_records": { "type": "integer", "minimum": 0 },
+        "artifact_blobs": { "type": "integer", "minimum": 0 },
+        "state_generations": { "type": "integer", "minimum": 0 },
+        "pack_objects": { "type": "integer", "minimum": 0 },
+        "canonical_files": { "type": "integer", "minimum": 0 },
+        "canonical_symlinks": { "type": "integer", "minimum": 0 },
+        "canonical_trees": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "lifecyclePreparedResult": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "deployment"],
+      "properties": {
+        "type": { "enum": ["disable", "enable", "remove_namespace", "set_history_retention", "pin", "unpin", "add_restore_point", "drop_restore_point"] },
+        "deployment": { "$ref": "#/$defs/preparedDeployment" }
+      }
+    },
+    "catalogNamespaceInspection": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "generation"],
+      "properties": { "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" } }
+    },
+    "catalogInspection": {
+      "type": "object", "additionalProperties": false, "required": ["digest", "namespaces", "decoded_bytes"],
+      "properties": { "digest": { "$ref": "#/$defs/digest" }, "namespaces": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/catalogNamespaceInspection" } }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "catalogResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "catalog"],
+      "properties": { "type": { "const": "catalog" }, "catalog": { "$ref": "#/$defs/catalogInspection" } }
+    },
+    "generationInspection": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["namespace", "generation", "lifecycle", "desired_snapshot_digest", "target_count", "present_target_count", "absent_target_count", "plan_id", "predecessor", "tracked_root", "transition", "restore_point", "retention"],
+      "properties": {
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "generation": { "$ref": "#/$defs/digest" },
+        "lifecycle": { "enum": ["enabled", "disabled"] },
+        "desired_snapshot_digest": { "$ref": "#/$defs/digest" },
+        "target_count": { "type": "integer", "minimum": 0 },
+        "present_target_count": { "type": "integer", "minimum": 0 },
+        "absent_target_count": { "type": "integer", "minimum": 0 },
+        "plan_id": { "$ref": "#/$defs/preparedId" },
+        "predecessor": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "tracked_root": { "oneOf": [{ "$ref": "#/$defs/trackedRootInspection" }, { "type": "null" }] },
+        "transition": { "$ref": "#/$defs/lifecycleTransition" },
+        "restore_point": { "oneOf": [{ "$ref": "#/$defs/restorePointInspection" }, { "type": "null" }] },
+        "retention": { "$ref": "#/$defs/retentionAuthorityInspection" }
+      }
+    },
+    "namespaceInspection": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "head", "generation", "decoded_bytes"],
+      "properties": { "namespace": { "$ref": "#/$defs/namespaceName" }, "head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }, "generation": { "oneOf": [{ "$ref": "#/$defs/generationInspection" }, { "type": "null" }] }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "namespaceResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace"],
+      "properties": { "type": { "const": "namespace" }, "namespace": { "$ref": "#/$defs/namespaceInspection" } }
+    },
+    "namespaceHistory": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "head", "generations", "decoded_bytes"],
+      "properties": { "namespace": { "$ref": "#/$defs/namespaceName" }, "head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }, "generations": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/generationInspection" } }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "historyResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "history"],
+      "properties": { "type": { "const": "history" }, "history": { "$ref": "#/$defs/namespaceHistory" } }
+    },
+    "generationResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "generation"],
+      "properties": { "type": { "const": "generation" }, "generation": { "$ref": "#/$defs/generationInspection" } }
+    },
+    "desiredTargetState": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "digest", "byte_len", "mode"], "properties": { "kind": { "const": "file" }, "digest": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }, "byte_len": { "type": ["integer", "null"], "minimum": 0 }, "mode": { "type": ["integer", "null"], "minimum": 0, "maximum": 511 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "mode"], "properties": { "kind": { "const": "directory" }, "mode": { "type": ["integer", "null"], "minimum": 0, "maximum": 511 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "object"], "properties": { "kind": { "const": "symlink" }, "object": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "tree", "archive_provenance"], "properties": { "kind": { "const": "tree" }, "tree": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] }, "archive_provenance": { "oneOf": [{ "$ref": "#/$defs/archiveProvenance" }, { "type": "null" }] } } }
+      ]
+    },
+    "desiredTarget": {
+      "type": "object", "additionalProperties": false, "required": ["authority", "relative_path", "state"],
+      "properties": { "authority": { "$ref": "#/$defs/deploymentName" }, "relative_path": { "$ref": "#/$defs/relativePath" }, "state": { "$ref": "#/$defs/desiredTargetState" } }
+    },
+    "desiredSnapshotInspection": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "generation", "digest", "targets", "decoded_bytes"],
+      "properties": { "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "digest": { "$ref": "#/$defs/digest" }, "targets": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/desiredTarget" } }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "desiredSnapshotResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "snapshot"],
+      "properties": { "type": { "const": "desired_snapshot" }, "snapshot": { "$ref": "#/$defs/desiredSnapshotInspection" } }
+    },
+    "canonicalTreeEntryObject": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "digest", "byte_len"], "properties": { "kind": { "const": "file" }, "digest": { "$ref": "#/$defs/digest" }, "byte_len": { "type": "integer", "minimum": 0 } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "digest"], "properties": { "kind": { "enum": ["directory", "symlink"] }, "digest": { "$ref": "#/$defs/digest" } } }
+      ]
+    },
+    "canonicalTreeEntry": {
+      "type": "object", "additionalProperties": false, "required": ["relative_path", "mode", "object"],
+      "properties": { "relative_path": { "$ref": "#/$defs/relativePath" }, "mode": { "type": "integer", "minimum": 0, "maximum": 511 }, "object": { "$ref": "#/$defs/canonicalTreeEntryObject" } }
+    },
+    "canonicalTreeInspection": {
+      "type": "object", "additionalProperties": false, "required": ["tree", "root_mode", "entries", "decoded_bytes"],
+      "properties": { "tree": { "$ref": "#/$defs/digest" }, "root_mode": { "type": "integer", "minimum": 0, "maximum": 511 }, "entries": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/canonicalTreeEntry" } }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "canonicalTreeResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "tree"],
+      "properties": { "type": { "const": "canonical_tree" }, "tree": { "$ref": "#/$defs/canonicalTreeInspection" } }
+    },
+    "artifactMetadataInspection": {
+      "type": "object", "additionalProperties": false, "required": ["plan_id", "descriptor", "decoded_bytes"],
+      "properties": { "plan_id": { "$ref": "#/$defs/preparedId" }, "descriptor": { "$ref": "#/$defs/artifactDescriptor" }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "artifactMetadataResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "artifact"],
+      "properties": { "type": { "const": "artifact_metadata" }, "artifact": { "$ref": "#/$defs/artifactMetadataInspection" } }
+    },
+    "capturedInputsInspection": {
+      "type": "object", "additionalProperties": false, "required": ["plan_id", "graph_digest", "inputs", "decoded_bytes"],
+      "properties": { "plan_id": { "$ref": "#/$defs/preparedId" }, "graph_digest": { "$ref": "#/$defs/digest" }, "inputs": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareInput" } }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "capturedInputsResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "inputs"],
+      "properties": { "type": { "const": "captured_inputs" }, "inputs": { "$ref": "#/$defs/capturedInputsInspection" } }
+    },
+    "transformProvenanceInspection": {
+      "type": "object", "additionalProperties": false, "required": ["plan_id", "transforms", "decoded_bytes"],
+      "properties": { "plan_id": { "$ref": "#/$defs/preparedId" }, "transforms": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/transformProvenance" } }, "decoded_bytes": { "type": "integer", "minimum": 0 } }
+    },
+    "transformProvenanceResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "provenance"],
+      "properties": { "type": { "const": "transform_provenance" }, "provenance": { "$ref": "#/$defs/transformProvenanceInspection" } }
+    },
+    "retentionInspection": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "generation", "authority"],
+      "properties": { "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "authority": { "$ref": "#/$defs/retentionAuthorityInspection" } }
+    },
+    "retentionResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "retention"],
+      "properties": { "type": { "const": "retention" }, "retention": { "$ref": "#/$defs/retentionInspection" } }
+    },
+    "trackingInspection": {
+      "type": "object", "additionalProperties": false, "required": ["namespace", "generation", "tracked_root"],
+      "properties": { "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "tracked_root": { "oneOf": [{ "$ref": "#/$defs/trackedRootInspection" }, { "type": "null" }] } }
+    },
+    "trackingResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "tracking"],
+      "properties": { "type": { "const": "tracking" }, "tracking": { "$ref": "#/$defs/trackingInspection" } }
+    },
+    "targetStatus": {
+      "type": "object", "additionalProperties": false, "required": ["authority", "relative_path", "status"],
+      "properties": { "authority": { "$ref": "#/$defs/deploymentName" }, "relative_path": { "$ref": "#/$defs/relativePath" }, "status": { "enum": ["exact", "modified", "missing", "unexpected", "stale", "incompatible"] } }
+    },
+    "namespaceStatus": {
+      "type": "object", "additionalProperties": false,
+      "required": ["namespace", "head", "lifecycle", "desired_snapshot_digest", "status", "targets", "observed_bytes", "detail"],
+      "properties": {
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "head": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "lifecycle": { "enum": ["enabled", "disabled", null] },
+        "desired_snapshot_digest": { "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }] },
+        "status": { "enum": ["not_found", "enabled_exact", "enabled_modified", "enabled_missing", "enabled_unexpected", "disabled", "stale", "incompatible_or_corrupt", "recovery_required"] },
+        "targets": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/targetStatus" } },
+        "observed_bytes": { "type": "integer", "minimum": 0 },
+        "detail": { "oneOf": [{ "$ref": "#/$defs/text" }, { "type": "null" }] }
+      }
+    },
+    "namespaceStatusResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "status"],
+      "properties": { "type": { "const": "status" }, "status": { "$ref": "#/$defs/namespaceStatus" } }
+    },
+    "fsckSubject": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind"], "properties": { "kind": { "enum": ["store_descriptor", "transaction_lock", "maintenance_lock", "journal", "journal_staging", "catalog", "catalog_staging", "retention", "ownership", "coverage"] } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "namespace"], "properties": { "kind": { "const": "namespace" }, "namespace": { "$ref": "#/$defs/namespaceName" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "plan_id"], "properties": { "kind": { "const": "prepared_plan" }, "plan_id": { "$ref": "#/$defs/preparedId" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "digest"], "properties": { "kind": { "enum": ["generation", "artifact_blob", "pack_object", "canonical_file", "canonical_symlink", "canonical_tree"] }, "digest": { "$ref": "#/$defs/digest" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "authority", "relative_path"], "properties": { "kind": { "const": "target" }, "authority": { "$ref": "#/$defs/deploymentName" }, "relative_path": { "$ref": "#/$defs/relativePath" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "area"], "properties": { "kind": { "const": "store_area" }, "area": { "enum": ["root", "state", "generations", "prepared", "transactions", "objects", "artifact_blobs", "pack_objects", "canonical_files", "canonical_symlinks", "canonical_trees"] } } }
+      ]
+    },
+    "fsckFinding": {
+      "type": "object", "additionalProperties": false, "required": ["code", "severity", "subject", "detail"],
+      "properties": {
+        "code": { "enum": ["invalid_descriptor", "recovery_required", "invalid_journal", "missing_catalog", "invalid_catalog", "missing_generation", "invalid_generation", "cyclic_history", "cross_namespace_history", "shared_generation", "missing_prepared_plan", "invalid_prepared_plan", "invalid_prepared_transition", "missing_artifact_blob", "corrupt_artifact_blob", "artifact_length_mismatch", "missing_pack_object", "corrupt_pack_object", "missing_canonical_object", "corrupt_canonical_object", "invalid_lock_metadata", "invalid_staging", "malformed_store_entry", "unreachable_immutable_object", "target_drift", "target_observation_failed", "authority_changed", "invalid_ownership", "traversal_limit_exceeded", "decoded_byte_limit_exceeded", "finding_limit_exceeded"] },
+        "severity": { "enum": ["error", "warning"] },
+        "subject": { "$ref": "#/$defs/fsckSubject" },
+        "detail": { "$ref": "#/$defs/text" }
+      }
+    },
+    "fsckReport": {
+      "type": "object", "additionalProperties": false,
+      "required": ["findings", "checked_generations", "checked_prepared_plans", "checked_artifact_blobs", "checked_pack_objects", "checked_canonical_files", "checked_canonical_symlinks", "checked_canonical_trees", "checked_targets", "decoded_bytes", "observed_bytes", "findings_truncated", "complete"],
+      "properties": {
+        "findings": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/fsckFinding" } },
+        "checked_generations": { "type": "integer", "minimum": 0 },
+        "checked_prepared_plans": { "type": "integer", "minimum": 0 },
+        "checked_artifact_blobs": { "type": "integer", "minimum": 0 },
+        "checked_pack_objects": { "type": "integer", "minimum": 0 },
+        "checked_canonical_files": { "type": "integer", "minimum": 0 },
+        "checked_canonical_symlinks": { "type": "integer", "minimum": 0 },
+        "checked_canonical_trees": { "type": "integer", "minimum": 0 },
+        "checked_targets": { "type": "integer", "minimum": 0 },
+        "decoded_bytes": { "type": "integer", "minimum": 0 },
+        "observed_bytes": { "type": "integer", "minimum": 0 },
+        "findings_truncated": { "type": "boolean" },
+        "complete": { "type": "boolean" }
+      }
+    },
+    "fsckResult": {
+      "type": "object", "additionalProperties": false, "required": ["type", "report"],
+      "properties": { "type": { "const": "fsck" }, "report": { "$ref": "#/$defs/fsckReport" } }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["severity", "code", "message"],
+      "properties": {
+        "severity": { "enum": ["error", "warning", "notice"] },
+        "code": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 64,
+          "pattern": "^[a-z][a-z0-9-]*$"
+        },
+        "message": { "$ref": "#/$defs/text" }
+      }
+    },
+    "noneDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "none" } }
+    },
+    "currentStatusDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "status"],
+      "properties": {
+        "type": { "const": "current_status" },
+        "status": { "enum": ["absent", "uninitialized"] }
+      }
+    },
+    "unsafeDirectoryDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "directory", "reason"],
+      "properties": {
+        "type": { "const": "unsafe_directory" },
+        "directory": { "enum": ["state_parent", "v1_root"] },
+        "reason": {
+          "enum": [
+            "wrong_owner",
+            "group_or_other_writable",
+            "special_mode_bits_set",
+            "unexpected_mode",
+            "ancestry_limit_exceeded"
+          ]
+        }
+      }
+    },
+    "rootObservationDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "root"],
+      "properties": {
+        "type": { "const": "root_observation" },
+        "root": { "const": "v1" }
+      }
+    },
+    "storeMetadataDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "reason"],
+      "properties": {
+        "type": { "const": "store_metadata" },
+        "reason": {
+          "enum": [
+            "marker_missing_with_other_entries",
+            "marker_not_regular",
+            "marker_too_large",
+            "unexpected_root_entry",
+            "invalid_root_entry",
+            "wrong_owner",
+            "unexpected_mode",
+            "multiple_links",
+            "observation_changed",
+            "invalid_descriptor"
+          ]
+        }
+      }
+    },
+    "unsupportedMachineDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "schema", "expected", "found"],
+      "properties": {
+        "type": { "const": "unsupported_schema" },
+        "schema": { "const": "machine" },
+        "expected": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "found": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "unsupportedStoreDetails": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "schema", "expected", "found"],
+      "properties": {
+        "type": { "const": "unsupported_schema" },
+        "schema": { "const": "store" },
+        "expected": { "type": "integer", "minimum": 0, "maximum": 4294967295 },
+        "found": { "type": "integer", "minimum": 0, "maximum": 4294967295 }
+      }
+    },
+    "details": {
+      "oneOf": [
+        { "$ref": "#/$defs/noneDetails" },
+        { "$ref": "#/$defs/currentStatusDetails" },
+        { "$ref": "#/$defs/unsafeDirectoryDetails" },
+        { "$ref": "#/$defs/rootObservationDetails" },
+        { "$ref": "#/$defs/storeMetadataDetails" },
+        { "$ref": "#/$defs/unsupportedMachineDetails" },
+        { "$ref": "#/$defs/unsupportedStoreDetails" }
+      ]
+    },
+    "error": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["category", "code", "message", "details", "diagnostics"],
+      "properties": {
+        "category": {
+          "enum": [
+            "invalid_request",
+            "unsupported",
+            "not_found",
+            "permission_denied",
+            "conflict",
+            "resource_limit",
+            "unavailable",
+            "internal"
+          ]
+        },
+        "code": {
+          "enum": [
+            "malformed-json",
+            "invalid-request",
+            "unsupported-machine-version",
+            "frame-resource-limit",
+            "read-only-store",
+            "store-not-ready",
+            "state-parent-missing",
+            "unsafe-directory",
+            "root-observation-changed",
+            "state-parent-observation-changed",
+            "malformed-store-metadata",
+            "unsupported-store-version",
+            "store-io",
+            "plan-not-found",
+            "artifact-not-found",
+            "approval-mismatch",
+            "stale-plan",
+            "recovery-required",
+            "operation-busy",
+            "invalid-deployment",
+            "unsafe-target",
+            "corrupt-store",
+            "corrupt-artifact",
+            "deployment-io",
+            "internal-engine-error"
+          ]
+        },
+        "message": { "$ref": "#/$defs/text" },
+        "details": { "$ref": "#/$defs/details" },
+        "diagnostics": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/diagnostic" }
+        }
+      },
+      "allOf": [
+        { "$ref": "#/$defs/malformedJsonShape" },
+        { "$ref": "#/$defs/invalidRequestShape" },
+        { "$ref": "#/$defs/unsupportedMachineShape" },
+        { "$ref": "#/$defs/resourceLimitShape" },
+        { "$ref": "#/$defs/readOnlyShape" },
+        { "$ref": "#/$defs/storeNotReadyShape" },
+        { "$ref": "#/$defs/stateParentMissingShape" },
+        { "$ref": "#/$defs/unsafeDirectoryShape" },
+        { "$ref": "#/$defs/rootObservationShape" },
+        { "$ref": "#/$defs/stateParentObservationShape" },
+        { "$ref": "#/$defs/storeMetadataShape" },
+        { "$ref": "#/$defs/unsupportedStoreShape" },
+        { "$ref": "#/$defs/storeIoShape" },
+        { "$ref": "#/$defs/planNotFoundShape" },
+        { "$ref": "#/$defs/artifactNotFoundShape" },
+        { "$ref": "#/$defs/approvalMismatchShape" },
+        { "$ref": "#/$defs/stalePlanShape" },
+        { "$ref": "#/$defs/recoveryRequiredShape" },
+        { "$ref": "#/$defs/operationBusyShape" },
+        { "$ref": "#/$defs/invalidDeploymentShape" },
+        { "$ref": "#/$defs/unsafeTargetShape" },
+        { "$ref": "#/$defs/corruptStoreShape" },
+        { "$ref": "#/$defs/corruptArtifactShape" },
+        { "$ref": "#/$defs/deploymentIoShape" },
+        { "$ref": "#/$defs/internalShape" }
+      ]
+    },
+    "malformedJsonShape": {
+      "if": { "properties": { "code": { "const": "malformed-json" } } },
+      "then": { "properties": { "category": { "const": "invalid_request" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "invalidRequestShape": {
+      "if": { "properties": { "code": { "const": "invalid-request" } } },
+      "then": { "properties": { "category": { "const": "invalid_request" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "unsupportedMachineShape": {
+      "if": { "properties": { "code": { "const": "unsupported-machine-version" } } },
+      "then": { "properties": { "category": { "const": "unsupported" }, "details": { "$ref": "#/$defs/unsupportedMachineDetails" } } }
+    },
+    "resourceLimitShape": {
+      "if": { "properties": { "code": { "const": "frame-resource-limit" } } },
+      "then": { "properties": { "category": { "const": "resource_limit" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "readOnlyShape": {
+      "if": { "properties": { "code": { "const": "read-only-store" } } },
+      "then": { "properties": { "category": { "const": "permission_denied" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "storeNotReadyShape": {
+      "if": { "properties": { "code": { "const": "store-not-ready" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/currentStatusDetails" } } }
+    },
+    "stateParentMissingShape": {
+      "if": { "properties": { "code": { "const": "state-parent-missing" } } },
+      "then": { "properties": { "category": { "const": "not_found" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "unsafeDirectoryShape": {
+      "if": { "properties": { "code": { "const": "unsafe-directory" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/unsafeDirectoryDetails" } } }
+    },
+    "rootObservationShape": {
+      "if": { "properties": { "code": { "const": "root-observation-changed" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/rootObservationDetails" } } }
+    },
+    "stateParentObservationShape": {
+      "if": { "properties": { "code": { "const": "state-parent-observation-changed" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "storeMetadataShape": {
+      "if": { "properties": { "code": { "const": "malformed-store-metadata" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/storeMetadataDetails" } } }
+    },
+    "unsupportedStoreShape": {
+      "if": { "properties": { "code": { "const": "unsupported-store-version" } } },
+      "then": { "properties": { "category": { "const": "unsupported" }, "details": { "$ref": "#/$defs/unsupportedStoreDetails" } } }
+    },
+    "storeIoShape": {
+      "if": { "properties": { "code": { "const": "store-io" } } },
+      "then": { "properties": { "category": { "const": "unavailable" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "planNotFoundShape": {
+      "if": { "properties": { "code": { "const": "plan-not-found" } } },
+      "then": { "properties": { "category": { "const": "not_found" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "artifactNotFoundShape": {
+      "if": { "properties": { "code": { "const": "artifact-not-found" } } },
+      "then": { "properties": { "category": { "const": "not_found" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "approvalMismatchShape": {
+      "if": { "properties": { "code": { "const": "approval-mismatch" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "stalePlanShape": {
+      "if": { "properties": { "code": { "const": "stale-plan" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "recoveryRequiredShape": {
+      "if": { "properties": { "code": { "const": "recovery-required" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "operationBusyShape": {
+      "if": { "properties": { "code": { "const": "operation-busy" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "invalidDeploymentShape": {
+      "if": { "properties": { "code": { "const": "invalid-deployment" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "unsafeTargetShape": {
+      "if": { "properties": { "code": { "const": "unsafe-target" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "corruptStoreShape": {
+      "if": { "properties": { "code": { "const": "corrupt-store" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "corruptArtifactShape": {
+      "if": { "properties": { "code": { "const": "corrupt-artifact" } } },
+      "then": { "properties": { "category": { "const": "conflict" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "deploymentIoShape": {
+      "if": { "properties": { "code": { "const": "deployment-io" } } },
+      "then": { "properties": { "category": { "const": "unavailable" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "internalShape": {
+      "if": { "properties": { "code": { "const": "internal-engine-error" } } },
+      "then": { "properties": { "category": { "const": "internal" }, "details": { "$ref": "#/$defs/noneDetails" } } }
+    },
+    "errorEnvelope": {
+      "oneOf": [
+        { "$ref": "#/$defs/correlatedErrorEnvelope" },
+        { "$ref": "#/$defs/uncorrelatedErrorEnvelope" }
+      ]
+    },
+    "correlatedErrorEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "sequence", "type", "error"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "request_id": { "$ref": "#/$defs/requestId" },
+        "sequence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "type": { "const": "error" },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    },
+    "uncorrelatedErrorEnvelope": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schema_version", "request_id", "sequence", "type", "error"],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "request_id": { "type": "null" },
+        "sequence": { "const": 0 },
+        "type": { "const": "error" },
+        "error": { "$ref": "#/$defs/error" }
+      }
+    }
+  }
+}

@@ -1,0 +1,436 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://malm.invalid/schemas/machine/v1/request.schema.json",
+  "title": "Malm machine/v1 request record",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "request_id", "type", "request"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "request_id": { "$ref": "#/$defs/requestId" },
+    "type": { "const": "request" },
+    "request": {
+      "oneOf": [
+        { "$ref": "#/$defs/storeStatus" },
+        { "$ref": "#/$defs/initializeStore" },
+        { "$ref": "#/$defs/prepare" },
+        { "$ref": "#/$defs/plan" },
+        { "$ref": "#/$defs/artifact" },
+        { "$ref": "#/$defs/commit" },
+        { "$ref": "#/$defs/state" },
+        { "$ref": "#/$defs/recover" },
+        { "$ref": "#/$defs/prune" },
+        { "$ref": "#/$defs/checkout" },
+        { "$ref": "#/$defs/disable" },
+        { "$ref": "#/$defs/enable" },
+        { "$ref": "#/$defs/removeNamespace" },
+        { "$ref": "#/$defs/setHistoryRetention" },
+        { "$ref": "#/$defs/pin" },
+        { "$ref": "#/$defs/unpin" },
+        { "$ref": "#/$defs/addRestorePoint" },
+        { "$ref": "#/$defs/dropRestorePoint" },
+        { "$ref": "#/$defs/catalog" },
+        { "$ref": "#/$defs/namespace" },
+        { "$ref": "#/$defs/history" },
+        { "$ref": "#/$defs/generation" },
+        { "$ref": "#/$defs/desiredSnapshot" },
+        { "$ref": "#/$defs/canonicalTree" },
+        { "$ref": "#/$defs/artifactMetadata" },
+        { "$ref": "#/$defs/capturedInputs" },
+        { "$ref": "#/$defs/transformProvenance" },
+        { "$ref": "#/$defs/retention" },
+        { "$ref": "#/$defs/tracking" },
+        { "$ref": "#/$defs/status" },
+        { "$ref": "#/$defs/fsck" }
+      ]
+    }
+  },
+  "$defs": {
+    "requestId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9._:-]+$"
+    },
+    "digest": { "type": "string", "pattern": "^sha256-[0-9a-f]{64}$" },
+    "preparedId": { "type": "string", "pattern": "^pp-[0-9a-f]{64}$" },
+    "artifactId": { "type": "string", "minLength": 1, "maxLength": 255 },
+    "deploymentName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "namespaceName": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128,
+      "pattern": "^[A-Za-z0-9_-]+$"
+    },
+    "relativePath": { "type": "string", "minLength": 1, "maxLength": 4096 },
+    "emptyOperation": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"]
+    },
+    "storeStatus": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "store_status" } }
+    },
+    "initializeStore": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "initialize_store" } }
+    },
+    "prepareInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "name", "digest"],
+      "properties": {
+        "kind": { "enum": ["source", "config", "lock", "component", "asset", "other"] },
+        "name": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "prepareArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "bytes_hex", "media_type"],
+      "properties": {
+        "id": { "$ref": "#/$defs/artifactId" },
+        "bytes_hex": { "type": "string", "pattern": "^(?:[0-9a-f]{2})*$" },
+        "media_type": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "prepareFinding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["code", "message", "approval_required"],
+      "properties": {
+        "code": { "type": "string", "minLength": 1, "maxLength": 1024 },
+        "message": { "type": "string", "minLength": 1, "maxLength": 65536 },
+        "approval_required": { "type": "boolean" }
+      }
+    },
+    "archiveProvenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["payload", "decoder"],
+      "properties": {
+        "payload": { "$ref": "#/$defs/digest" },
+        "decoder": { "type": "string", "minLength": 1, "maxLength": 1024 }
+      }
+    },
+    "prepareTargetState": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "digest", "byte_len", "mode"],
+          "properties": {
+            "kind": { "const": "file" },
+            "digest": { "$ref": "#/$defs/digest" },
+            "byte_len": { "type": "integer", "minimum": 0 },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "mode"],
+          "properties": {
+            "kind": { "const": "directory" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "object"],
+          "properties": {
+            "kind": { "const": "symlink" },
+            "object": { "$ref": "#/$defs/digest" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["kind", "tree", "archive_provenance"],
+          "properties": {
+            "kind": { "const": "tree" },
+            "tree": { "$ref": "#/$defs/digest" },
+            "archive_provenance": {
+              "oneOf": [{ "$ref": "#/$defs/archiveProvenance" }, { "type": "null" }]
+            }
+          }
+        }
+      ]
+    },
+    "prepareOperation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "object", "replace_existing"],
+          "properties": {
+            "operation": { "const": "place_symlink" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "object": { "$ref": "#/$defs/digest" },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "tree", "archive_provenance", "replace_existing"],
+          "properties": {
+            "operation": { "const": "place_tree" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "tree": { "$ref": "#/$defs/digest" },
+            "archive_provenance": {
+              "oneOf": [{ "$ref": "#/$defs/archiveProvenance" }, { "type": "null" }]
+            },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "mode", "replace_existing"],
+          "properties": {
+            "operation": { "const": "ensure_directory" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "artifact_id", "mode", "replace_existing"],
+          "properties": {
+            "operation": { "const": "place_file" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "artifact_id": { "$ref": "#/$defs/artifactId" },
+            "mode": { "type": "integer", "minimum": 0, "maximum": 511 },
+            "replace_existing": { "type": "boolean" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path"],
+          "properties": {
+            "operation": { "const": "remove_leaf" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path"],
+          "properties": {
+            "operation": { "const": "assert_absent" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["operation", "authority", "relative_path", "state"],
+          "properties": {
+            "operation": { "const": "assert_exact" },
+            "authority": { "$ref": "#/$defs/deploymentName" },
+            "relative_path": { "$ref": "#/$defs/relativePath" },
+            "state": { "$ref": "#/$defs/prepareTargetState" }
+          }
+        }
+      ]
+    },
+    "prepare": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "namespace", "expected_head", "graph_digest", "inputs", "artifacts", "findings", "operations"],
+      "properties": {
+        "type": { "const": "prepare" },
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "expected_head": {
+          "oneOf": [{ "$ref": "#/$defs/digest" }, { "type": "null" }]
+        },
+        "graph_digest": { "$ref": "#/$defs/digest" },
+        "inputs": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareInput" } },
+        "artifacts": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareArtifact" } },
+        "findings": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareFinding" } },
+        "operations": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/prepareOperation" } }
+      }
+    },
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "plan_id"],
+      "properties": { "type": { "const": "plan" }, "plan_id": { "$ref": "#/$defs/preparedId" } }
+    },
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "plan_id", "artifact_id"],
+      "properties": {
+        "type": { "const": "artifact" },
+        "plan_id": { "$ref": "#/$defs/preparedId" },
+        "artifact_id": { "$ref": "#/$defs/artifactId" }
+      }
+    },
+    "commit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "plan_id", "approval_digest"],
+      "properties": {
+        "type": { "const": "commit" },
+        "plan_id": { "$ref": "#/$defs/preparedId" },
+        "approval_digest": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "namespace"],
+      "properties": {
+        "type": { "const": "state" },
+        "namespace": { "$ref": "#/$defs/namespaceName" }
+      }
+    },
+    "recover": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": { "type": { "const": "recover" } }
+    },
+    "prune": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "plan_ids"],
+      "properties": {
+        "type": { "const": "prune" },
+        "plan_ids": { "type": "array", "maxItems": 4096, "items": { "$ref": "#/$defs/preparedId" } }
+      }
+    },
+    "checkout": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "namespace", "target_generation"],
+      "properties": {
+        "type": { "const": "checkout" },
+        "namespace": { "$ref": "#/$defs/namespaceName" },
+        "target_generation": { "$ref": "#/$defs/digest" }
+      }
+    },
+    "retentionObject": {
+      "oneOf": [
+        { "type": "object", "additionalProperties": false, "required": ["kind", "plan_id"], "properties": { "kind": { "const": "prepared_plan" }, "plan_id": { "$ref": "#/$defs/preparedId" } } },
+        { "type": "object", "additionalProperties": false, "required": ["kind", "digest"], "properties": { "kind": { "enum": ["state_generation", "artifact_blob", "pack_object", "canonical_file", "canonical_symlink", "canonical_tree"] }, "digest": { "$ref": "#/$defs/digest" } } }
+      ]
+    },
+    "disable": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace"],
+      "properties": { "type": { "const": "disable" }, "namespace": { "$ref": "#/$defs/namespaceName" } }
+    },
+    "enable": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace"],
+      "properties": { "type": { "const": "enable" }, "namespace": { "$ref": "#/$defs/namespaceName" } }
+    },
+    "removeNamespace": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "history"],
+      "properties": { "type": { "const": "remove_namespace" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "history": { "const": "drop" } }
+    },
+    "setHistoryRetention": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generations"],
+      "properties": { "type": { "const": "set_history_retention" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generations": { "type": "integer", "minimum": 1, "maximum": 65536 } }
+    },
+    "pin": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "object"],
+      "properties": { "type": { "const": "pin" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "object": { "$ref": "#/$defs/retentionObject" } }
+    },
+    "unpin": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "object"],
+      "properties": { "type": { "const": "unpin" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "object": { "$ref": "#/$defs/retentionObject" } }
+    },
+    "addRestorePoint": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generation"],
+      "properties": { "type": { "const": "add_restore_point" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" } }
+    },
+    "dropRestorePoint": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generation"],
+      "properties": { "type": { "const": "drop_restore_point" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" } }
+    },
+    "catalog": {
+      "type": "object", "additionalProperties": false, "required": ["type", "max_namespaces", "max_decoded_bytes"],
+      "properties": { "type": { "const": "catalog" }, "max_namespaces": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "namespace": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "max_decoded_bytes"],
+      "properties": { "type": { "const": "namespace" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "history": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "max_generations", "max_decoded_bytes"],
+      "properties": { "type": { "const": "history" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "max_generations": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "generation": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generation", "max_generations", "max_decoded_bytes"],
+      "properties": { "type": { "const": "generation" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "max_generations": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "desiredSnapshot": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generation", "max_targets", "max_decoded_bytes"],
+      "properties": { "type": { "const": "desired_snapshot" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "max_targets": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "canonicalTree": {
+      "type": "object", "additionalProperties": false, "required": ["type", "tree", "max_entries", "max_decoded_bytes"],
+      "properties": { "type": { "const": "canonical_tree" }, "tree": { "$ref": "#/$defs/digest" }, "max_entries": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "artifactMetadata": {
+      "type": "object", "additionalProperties": false, "required": ["type", "plan_id", "artifact_id", "max_decoded_bytes"],
+      "properties": { "type": { "const": "artifact_metadata" }, "plan_id": { "$ref": "#/$defs/preparedId" }, "artifact_id": { "$ref": "#/$defs/artifactId" }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "capturedInputs": {
+      "type": "object", "additionalProperties": false, "required": ["type", "plan_id", "max_items", "max_decoded_bytes"],
+      "properties": { "type": { "const": "captured_inputs" }, "plan_id": { "$ref": "#/$defs/preparedId" }, "max_items": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "transformProvenance": {
+      "type": "object", "additionalProperties": false, "required": ["type", "plan_id", "max_items", "max_decoded_bytes"],
+      "properties": { "type": { "const": "transform_provenance" }, "plan_id": { "$ref": "#/$defs/preparedId" }, "max_items": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "retention": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generation", "max_generations", "max_decoded_bytes"],
+      "properties": { "type": { "const": "retention" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "max_generations": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "tracking": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "generation", "max_generations", "max_decoded_bytes"],
+      "properties": { "type": { "const": "tracking" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "generation": { "$ref": "#/$defs/digest" }, "max_generations": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "status": {
+      "type": "object", "additionalProperties": false, "required": ["type", "namespace", "max_targets", "max_observed_bytes"],
+      "properties": { "type": { "const": "status" }, "namespace": { "$ref": "#/$defs/namespaceName" }, "max_targets": { "type": "integer", "minimum": 1, "maximum": 4096 }, "max_observed_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 } }
+    },
+    "fsck": {
+      "type": "object", "additionalProperties": false,
+      "required": ["type", "max_findings", "max_objects", "max_decoded_bytes", "observe_targets", "max_target_observations", "max_observed_bytes"],
+      "properties": {
+        "type": { "const": "fsck" },
+        "max_findings": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_objects": { "type": "integer", "minimum": 1, "maximum": 262144 },
+        "max_decoded_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 },
+        "observe_targets": { "type": "boolean" },
+        "max_target_observations": { "type": "integer", "minimum": 1, "maximum": 4096 },
+        "max_observed_bytes": { "type": "integer", "minimum": 1, "maximum": 536870912 }
+      }
+    }
+  }
+}

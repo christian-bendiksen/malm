@@ -1,0 +1,8 @@
+pack schema-version=1 package-id="com.example.invalid" install-hook="./setup" {
+    modules {}
+    dependencies {}
+    templates {}
+    schemas {}
+    assets {}
+    components {}
+}

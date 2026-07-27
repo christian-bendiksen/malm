@@ -1,0 +1,18 @@
+[package]
+name = "malm-config"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+kdl = { version = "=6.5.0", default-features = false, features = ["span"] }
+malm-pack = { path = "../malm-pack" }
+malm-types = { path = "../malm-types" }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+
+[lints]
+workspace = true

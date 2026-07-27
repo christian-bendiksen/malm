@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://malm.dev/schemas/archive/v1/provenance.schema.json",
+  "title": "Malm archive/v1 provenance",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "declaration", "decoder", "root_digest"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "declaration": {
+      "$ref": "declaration.schema.json"
+    },
+    "decoder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version"],
+      "properties": {
+        "name": { "const": "malm.posix-ustar.none" },
+        "version": { "const": 1 }
+      }
+    },
+    "root_digest": {
+      "type": "string",
+      "pattern": "^sha256-[0-9a-f]{64}$"
+    }
+  }
+}

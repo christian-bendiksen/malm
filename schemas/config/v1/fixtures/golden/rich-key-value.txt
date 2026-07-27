@@ -1,0 +1,5 @@
+alpha: true
+count: 2
+empty: 
+message: line\nnext
+ratio: 1.0

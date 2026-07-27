@@ -1,0 +1,36 @@
+[package]
+name = "malm-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish = false
+
+[features]
+failpoints = ["malm-commit/failpoints"]
+
+[dependencies]
+getrandom = "0.4"
+hex = "0.4"
+libc = "0.2"
+malm-archive = { path = "../malm-archive" }
+lzma-rs = "0.3"
+malm-authoring = { path = "../malm-authoring" }
+malm-config = { path = "../malm-config" }
+malm-commit = { path = "../malm-commit" }
+malm-format-component-api = { path = "../malm-format-component-api" }
+malm-module-graph = { path = "../malm-module-graph" }
+malm-pack = { path = "../malm-pack" }
+malm-root = { path = "../malm-root" }
+malm-store = { path = "../malm-store" }
+malm-tree = { path = "../malm-tree" }
+malm-types = { path = "../malm-types" }
+rustix = { version = "1", features = ["fs", "process"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile = "^3.27"
+
+[lints]
+workspace = true

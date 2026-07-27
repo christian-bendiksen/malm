@@ -1,0 +1,136 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://malm.dev/schemas/lock/v1/schema.json",
+  "title": "Malm lock/v1 complete pack graph",
+  "type": "object",
+  "required": ["schema_version", "root_node_id", "nodes"],
+  "properties": {
+    "schema_version": { "type": "integer", "const": 1 },
+    "root_node_id": { "$ref": "#/$defs/digest" },
+    "nodes": {
+      "type": "array",
+      "maxItems": 4096,
+      "items": { "$ref": "#/$defs/node" }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "digest": {
+      "type": "string",
+      "pattern": "^sha256-[0-9a-f]{64}$"
+    },
+    "package_id": {
+      "type": "string",
+      "maxLength": 253,
+      "pattern": "^[a-z](?:[a-z0-9-]*[a-z0-9])?(?:\\.[a-z](?:[a-z0-9-]*[a-z0-9])?)+$"
+    },
+    "alias": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 32,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 63,
+      "pattern": "^[a-z][a-z0-9-]*$"
+    },
+    "path": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 1024
+    },
+    "git_oid": {
+      "type": "string",
+      "oneOf": [
+        { "pattern": "^sha1-[0-9a-f]{40}$" },
+        { "pattern": "^sha256-[0-9a-f]{64}$" }
+      ]
+    },
+    "source": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "root" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "url", "commit", "subdir"],
+          "properties": {
+            "kind": { "const": "git" },
+            "url": {
+              "type": "string",
+              "format": "uri",
+              "maxLength": 2048,
+              "pattern": "^https://[^\\s\\\\?#]+(?:/[^\\s\\\\?#]*)?$"
+            },
+            "commit": { "$ref": "#/$defs/git_oid" },
+            "subdir": { "type": "string", "minLength": 1, "maxLength": 1024 }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind", "locator"],
+          "properties": {
+            "kind": { "const": "local" },
+            "locator": { "type": "string", "minLength": 1, "maxLength": 4096 }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "dependency": {
+      "type": "object",
+      "required": ["alias", "target_node_id"],
+      "properties": {
+        "alias": { "$ref": "#/$defs/alias" },
+        "target_node_id": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "component": {
+      "type": "object",
+      "required": ["name", "path", "digest", "interface", "execution_profile"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "path": { "$ref": "#/$defs/path" },
+        "digest": { "$ref": "#/$defs/digest" },
+        "interface": { "const": "format-component/v1" },
+        "execution_profile": { "$ref": "#/$defs/digest" }
+      },
+      "additionalProperties": false
+    },
+    "node": {
+      "type": "object",
+      "required": [
+        "node_id",
+        "package_id",
+        "source",
+        "content_digest",
+        "dependencies",
+        "components"
+      ],
+      "properties": {
+        "node_id": { "$ref": "#/$defs/digest" },
+        "package_id": { "$ref": "#/$defs/package_id" },
+        "source": { "$ref": "#/$defs/source" },
+        "content_digest": { "$ref": "#/$defs/digest" },
+        "dependencies": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/dependency" }
+        },
+        "components": {
+          "type": "array",
+          "maxItems": 256,
+          "items": { "$ref": "#/$defs/component" }
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}
