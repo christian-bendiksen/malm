@@ -1,7 +1,16 @@
-# pack/v1 KDL Grammar
+# Pack manifest grammar (`pack/v1`)
 
-`malm-pack.kdl` is a UTF-8 KDL v2 file with one top-level `pack` node. Here is
-a complete manifest with every section:
+The `pack/v1` manifest contract defines the strict KDL representation of
+`malm-pack.kdl`. Pack authors use it to declare a pack, and manifest readers and
+lock generators use it to obtain the same validated semantic model from any
+accepted KDL spelling.
+
+A manifest is a UTF-8 KDL v2 document with exactly one top-level `pack` node.
+A `PackPath` is a validated path relative to the logical pack root. A
+`LocalLocator` is a separately validated path relative to the root pack and may
+start with parent segments. The two path types are not interchangeable.
+
+The following complete manifest shows every required section:
 
 ```kdl
 pack schema-version=1 package-id="com.example.desktop" {
@@ -34,11 +43,11 @@ pack schema-version=1 package-id="com.example.desktop" {
 }
 ```
 
-## Node Reference
+## Node reference
 
 | Node | Arguments | Required properties | Body |
 |---|---:|---|---|
-| `pack` | 0 | `schema-version` integer, `package-id` string | Seven required sections plus optional `captures` |
+| `pack` | 0 | `schema-version` integer, `package-id` string | Seven required sections and optional `captures` |
 | `modules` | 0 | none | Zero or more `module` nodes |
 | `module` | 1 string name | `path` string | Forbidden |
 | `config-documents` | 0 | none | Zero or more `document` nodes |
@@ -58,49 +67,67 @@ pack schema-version=1 package-id="com.example.desktop" {
 | `captures` | 0 | none | Zero or more `include` nodes |
 | `include` | 1 string path | none | Forbidden |
 
-## Required And Optional Sections
+## Document structure
 
-The seven sections through `components` must each appear exactly once. They
-keep their braces even when empty. The `captures` section is optional and may
-appear at most once.
+The seven sections from `modules` through `components` must each appear exactly
+once. Every section keeps its body braces when it is empty. The `captures`
+section is optional and may appear at most once.
 
-Use `captures` to limit which local files enter the pack. Its `include` paths
-list the files and directories to include. The manifest and lock files are
-always captured, whether or not `captures` is declared.
+Each node has exactly the arguments, properties, and body shape listed above.
+All listed properties are required. Nodes and entries must not have KDL type
+annotations. The reader rejects unknown nodes, extra arguments or properties,
+unknown children, duplicate properties, missing or forbidden bodies, and a
+dependency with either zero or more than one source child.
 
-When `captures` is omitted, the canonical writer leaves it out entirely. This
-keeps existing manifests and their digests unchanged when no capture roots are
-needed.
+Comments, property order, section order, and different valid KDL v2 string
+spellings can decode to the same model. They do not change the semantic model,
+but their exact manifest bytes remain part of the whole-tree pack digest. The
+canonical writer emits deterministic KDL, including the section order shown in
+the example.
 
-Capture roots are not verified. They only narrow what gets read. The whole-tree
-pack digest covers exactly the captured files, with or without declared roots.
+## Capture selection
 
-The [local capture](source-capture.md) and the
-[Git acquisition adapter](../../lock/v1/git-acquisition.md) both narrow to the
-roots declared here. One source tree has one digest under either adapter.
+Use `captures` to narrow source acquisition. Each `include` argument names one
+file or directory tree. The manifest is always selected. `malm.lock` remains a
+reserved path and never enters pack content; a Git tracked-root flow may retain
+the root lock temporarily for its separate lock validation.
 
-## What Malm Rejects
+Capture roots are syntactically valid `PackPath` values, but acquisition does
+not require each root to exist and does not verify it as a declaration. Roots
+only narrow which source entries are read. The content digest always covers
+exactly the files that survive capture.
 
-- Unknown nodes, arguments, properties, or children.
-- Duplicate properties on the same node.
-- A node that forbids a body having one.
-- A section node appearing more than once.
-- A node that must have one `git` or `local` child having neither or both.
+An absent `captures` section and an empty capture-root list both mean capture
+the whole source tree. The canonical writer omits `captures` when that list is
+empty, preserving the manifest bytes and digest of packs that need no roots.
 
-Comments and different valid KDL v2 string spellings decode to the same model,
-so they do not change what Malm sees. Their exact bytes are still part of the
-whole-tree pack digest.
+The [local capture adapter](source-capture.md) and the
+[Git acquisition adapter](../../lock/v1/git-acquisition.md) apply the same root
+selection. The same source tree therefore has one content digest under either
+adapter.
 
-## Names And Interfaces
+## Names and uniqueness
 
-`package-id`, module names, component names, and dependency aliases follow the
-`malm-types` v1 name profile.
+A `package-id` is a lowercase reverse-DNS name of at most 253 ASCII bytes. It
+contains at least two nonempty dot-separated segments. Every segment starts with
+a lowercase letter, ends with a lowercase letter or digit, and otherwise
+contains only lowercase letters, digits, or hyphens.
+
+Module and component names are 1 to 63 ASCII bytes. Dependency aliases are 1 to
+32 ASCII bytes. Each starts with a lowercase letter; every remaining byte is a
+lowercase letter, digit, or hyphen.
+
+Module names, component names, and dependency aliases must be unique in their
+respective sections. Template, schema, asset, and capture-root paths must also
+be unique in their sections. Module paths and configuration-document paths are
+sorted and unique within their own sections, and one path cannot serve both
+roles.
 
 A component `interface` must be exactly `format-component/v1`. The execution
 profile is not written here. Malm resolves it while creating or updating the
 lock.
 
-## Git Dependencies
+## Git dependencies
 
 A Git `url`:
 
@@ -116,7 +143,7 @@ A `commit` is `sha1-` followed by 40 lowercase hex digits, or `sha256-` followed
 by 64. Use `subdir="."` for the repository root. Any other `subdir` follows the
 pack path rules below.
 
-## Local Dependencies
+## Local dependencies
 
 A `workspace-path` is a slash path relative to the root pack, not the
 dependency that declares it. `.` selects the root pack.
@@ -126,7 +153,12 @@ needs root-consumer policy, so a local path can only read outside the pack when
 an operator allowed it. A path introduced by a remote-derived pack needs policy
 no matter how it is spelled.
 
-## Paths And Limits
+Each `LocalLocator` is at most 4,096 UTF-8 bytes and 64 segments. Except for the
+single value `.`, it must not be empty, absolute, contain empty or internal dot
+segments, use backslashes, contain control characters, or enter `.git`,
+`malm.lock`, or `.malm-lock.tmp`. A non-parent segment is at most 255 bytes.
+
+## Pack paths and resources
 
 Pack paths are case-sensitive UTF-8 Linux paths with slash separators.
 
@@ -138,14 +170,30 @@ Each path:
 - Must not be empty, `.`, `..`, contain a backslash or control character, or
   include a segment named `.git`, `malm.lock`, or `.malm-lock.tmp`.
 
-Module paths and config-document paths are sorted and unique within their own
-section. One path cannot serve both roles.
-
 Templates, schemas, and assets are exact pack files available to rich output
 and transform-resource references. External payload declarations are not part
 of this grammar.
 
-## Fixed Limits
+## Rejection conditions
+
+Malm rejects a manifest that violates any structural, scalar, path, uniqueness,
+or resource rule in this contract. In particular, rejection includes:
+
+- Invalid UTF-8, malformed KDL v2, more or less than one top-level `pack` node,
+  or a top-level node with another name.
+- A `schema-version` other than the integer `1`.
+- Unknown nodes, arguments, properties, or children; duplicate properties; or
+  any KDL type annotation.
+- A required section that is absent or repeated, or a repeated optional
+  `captures` section.
+- A body where one is forbidden, a missing required body, or a dependency with
+  neither or both of `git` and `local`.
+- Duplicate module names, component names, dependency aliases, or paths that
+  must be unique; or one path used as both a module and configuration document.
+- An unsupported component interface, malformed source selector, invalid name
+  or path, or a collection over its fixed limit.
+
+## Fixed limits
 
 | Limit | Maximum |
 |---|---|
@@ -157,5 +205,7 @@ of this grammar.
 | Schema paths | 4,096 |
 | Assets | 4,096 |
 | Components | 256 |
+| Capture roots | 4,096 |
 
-Each pack file is also subject to the pack-tree byte limits.
+Each captured tree is also subject to the file-count and byte limits in the
+[canonical content contract](canonical.md).

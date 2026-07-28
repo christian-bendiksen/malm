@@ -1,8 +1,28 @@
-# archive/v1 Trusted Decoder Contract
+# Trusted archive decoder contract (`archive/v1`)
 
-## Declaration
+This is the normative contract for converting a declared, uncompressed POSIX
+ustar payload into canonical `tree/v1` objects. Archive producers need it to
+create acceptable input; decoder and security reviewers need it to reproduce
+the exact accepted language, failure behavior, and resource accounting.
 
-An archive declaration fixes all of these values before reading begins:
+## Terms and boundary
+
+A **payload** is the exact byte sequence bound by the declaration. A **record**
+is one 512-byte ustar block. An **entry** is one nonzero header together with
+any file body and record padding. A **canonical component** is one valid UTF-8
+path segment as defined under [Paths and symlink targets](#paths-and-symlink-targets).
+A **synthesized directory** is a parent directory that the decoder creates when
+an entry names a descendant before naming that parent explicitly.
+
+The decoder reads only from the caller's `std::io::Read`. It does not perform
+compression, content sniffing, format negotiation, fallback decoding,
+filesystem access, process execution, or network access. It constructs the
+entire result in memory and returns no partial result on failure.
+
+## Declaration and decoder selection
+
+The declaration fixes every value below before the decoder reads any payload
+byte:
 
 ```text
 schema_version    1
@@ -13,41 +33,82 @@ payload_byte_len  exact unsigned byte length
 payload_digest    SHA-256 of exactly payload_byte_len bytes
 ```
 
-The decoder identity recorded in successful provenance is
-`malm.posix-ustar.none` version `1`. No content sniffing, compression,
-fallback decoder, or format negotiation is permitted.
+`payload_digest` uses the canonical text form `sha256-` followed by 64
+lowercase hexadecimal digits. The declaration contains every listed field and
+no additional field. See [declaration.schema.json](declaration.schema.json) for
+the JSON projection.
 
-## Stream Framing
+The successful provenance records decoder name `malm.posix-ustar.none` and
+decoder version `1`. No payload content may alter decoder selection.
 
-The decoder reads through `std::io::Read`. After declaration preflight, it
-consumes exactly `payload_byte_len` bytes even when a structural archive error
-is found, unless the reader truncates, returns an I/O error, or exhausts the
-explicit read-operation budget. It then performs one EOF probe. A byte after
-the declared payload, an early EOF, or a SHA-256 mismatch is an error.
+An unsupported decoder version or a declared payload length above
+`max_payload_bytes` fails preflight before the first read.
 
-The tar stream consists of 512-byte records and ends with exactly two all-zero
-records. A missing, partial, or nonzero second record is malformed. Any byte,
-including an additional zero record, inside the declared payload after those
-two records is trailing data. Blocking-factor padding is not accepted.
+## Payload reading and stream framing
 
-## Header Profile
+After preflight, the decoder consumes exactly `payload_byte_len` bytes. If it
+finds a parsing or resource error while processing the archive, it still drains
+the rest of the declared payload before returning that error. Draining stops
+only if the reader ends early, returns an I/O error, or exhausts
+`max_read_operations`.
 
-Every nonzero header is exactly the POSIX ustar layout with magic `ustar\0` and
-version `00`. The unsigned checksum is six octal digits, NUL, and space; during
-calculation all eight checksum bytes are spaces. Numeric mode, UID, GID, size,
-and mtime fields are full-width octal digits followed by NUL. GNU base-256 and
-space-terminated numeric forms are not accepted. Device fields are either all
-NUL or full-width NUL-terminated octal zero. Reserved bytes 500 through 511 are
-zero.
+After consuming the declared payload, the decoder makes one EOF probe. It
+rejects an early EOF, any byte returned by that probe, and any mismatch between
+`payload_digest` and the SHA-256 digest of the complete declared payload.
 
-Name, prefix, link-name, user-name, and group-name fields are NUL-terminated
-with only NUL after the first terminator, or occupy their complete field. User
-and group names are optional control-free UTF-8 ownership metadata. Numeric
-UID/GID, user/group names, and mtime are validated and then ignored. No other
-metadata is ignored. Nonzero device numbers and nonempty link names on files or
-directories are errors.
+The payload is a sequence of 512-byte records. Exactly two consecutive all-zero
+records terminate it:
 
-The only entry typeflags are:
+- A missing or partial first terminator record is malformed.
+- The second record must be complete and all zero. A missing, partial, or
+  nonzero second record is malformed.
+- The declared payload must end immediately after the second record. Any
+  remaining byte, including an additional zero record, is trailing payload
+  data.
+- A byte available outside the declared payload is also an error.
+
+Consequently, conventional tar blocking-factor padding is not accepted.
+
+## POSIX ustar header profile
+
+Every nonzero header must use this exact 512-byte layout. Offsets are zero
+based; widths are bytes.
+
+| Offset | Width | Field | Required representation |
+| ---: | ---: | --- | --- |
+| 0 | 100 | name | bounded text field |
+| 100 | 8 | mode | 7 octal digits, then NUL |
+| 108 | 8 | UID | 7 octal digits, then NUL |
+| 116 | 8 | GID | 7 octal digits, then NUL |
+| 124 | 12 | size | 11 octal digits, then NUL |
+| 136 | 12 | mtime | 11 octal digits, then NUL |
+| 148 | 8 | checksum | 6 octal digits, NUL, space |
+| 156 | 1 | typeflag | one allowed byte listed below |
+| 157 | 100 | link name | bounded text field |
+| 257 | 6 | magic | exact bytes `ustar\0` |
+| 263 | 2 | version | exact bytes `00` |
+| 265 | 32 | user name | bounded text field |
+| 297 | 32 | group name | bounded text field |
+| 329 | 8 | device major | all NUL, or 7 octal digits and NUL encoding zero |
+| 337 | 8 | device minor | all NUL, or 7 octal digits and NUL encoding zero |
+| 345 | 155 | prefix | bounded text field |
+| 500 | 12 | reserved | all zero |
+
+A bounded text field either occupies its complete field or ends at its first
+NUL. If it contains a NUL, every byte from that NUL through the end of the field
+must also be NUL.
+
+The checksum is the unsigned sum of all header bytes after treating all eight
+checksum-field bytes as spaces. GNU base-256 numbers and space-terminated
+numeric fields are not accepted.
+
+User and group names may be empty. If present, they must be control-free UTF-8.
+The decoder validates and then ignores UID, GID, user name, group name, and
+mtime. It does not ignore any other metadata. Device numbers must be zero.
+
+### Entry types and bodies
+
+Only these typeflags are accepted:
 
 ```text
 '0' regular file
@@ -55,71 +116,133 @@ The only entry typeflags are:
 '5' directory
 ```
 
-The historical NUL regular-file flag is not in the allowlist. Hard links,
-character/block devices, FIFOs, contiguous files, GNU sparse entries, PAX local
-or global headers, GNU long-name or long-link records, and every other GNU or
-unknown extension are errors. Directory and symlink sizes are zero. File data
-is followed by zero bytes through its containing 512-byte record.
+The historical NUL regular-file typeflag is not accepted. The decoder also
+rejects all of the following:
 
-## Paths And Links
+- hard links;
+- character devices, block devices, FIFOs, and contiguous files;
+- GNU sparse entries;
+- PAX local and global headers;
+- GNU long-name and long-link records;
+- every other GNU or unknown extension or entry type.
 
-The ustar prefix and name are joined with one slash. The result is nonempty
-UTF-8 and relative. Every slash-separated component is nonempty, is neither
-`.` nor `..`, and contains no slash, backslash, NUL, or Unicode control
-character. Consequently leading, repeated, and trailing slashes are errors.
-No percent decoding, Unicode normalization, case folding, host path parsing, or
-separator conversion occurs.
+A regular file may have a nonzero size, but its link name must be empty. Its
+body consists of exactly the declared bytes followed by zero padding through
+the containing 512-byte record. Nonzero padding or a body that extends beyond
+the declared payload is malformed.
 
-Symlink link-name bytes are nonempty control-free UTF-8. The target is relative
-and consists only of the same canonical components; absolute targets,
-backslashes, empty components, `.` and `..` are rejected. Its root-relative
-resolved byte length and depth are bounded. Targets are represented as data and
-never followed.
+A directory must have size zero and an empty link name. A symlink must have size
+zero; its link name carries the target and is validated below.
 
-Each normalized path may occur at most once. An explicit directory may appear
-after descendants that caused that directory to be synthesized, but two
-explicit entries for one path are duplicates. A non-directory cannot have a
-descendant, replace a directory, or replace a synthesized directory with
-descendants.
+## Paths and symlink targets
 
-## Canonical Objects
+For each entry, the ustar name must be nonempty. If the prefix is nonempty, the
+decoder joins the prefix and name with exactly one slash; otherwise it uses the
+name alone. The resulting path must be nonempty, UTF-8, and relative.
 
-The root and every parent omitted from the tar stream use mode `0755`. A later
-explicit entry sets a synthesized directory's mode. Regular-file and directory
-modes retain exactly their permission bits and must satisfy `tree/v1`; bits
-outside `0777` are rejected. Symlink headers must have mode `0777`, matching the
-fixed `tree/v1` symlink mode.
+Each slash-separated path component must be nonempty and must not be `.` or
+`..`. A component may not contain slash, backslash, NUL, or any Unicode control
+character. These rules reject leading, repeated, and trailing slashes.
 
-Regular-file bytes are raw SHA-256-addressed blobs. Symlink targets become
-canonical `SymlinkObjectV1` bytes. Direct children are sorted by exact UTF-8
-name bytes and become canonical `TreeObjectV1` bytes, built bottom-up. The
-result includes every object byte sequence and digest, a closed validated
-`TreeGraphV1`, its root digest, and declaration/decoder provenance.
+The decoder does not percent-decode, normalize Unicode, fold case, parse a host
+path, convert separators, or otherwise transform a path.
 
-Archive order and accepted ownership/timestamp metadata do not affect object
-bytes. Repeated equal file content has one blob identity but remains independent
-logical placements; hard-link topology is never preserved.
+A symlink target must be nonempty, control-free UTF-8. It must be relative and
+contain only slash-separated canonical components. Absolute targets,
+backslashes, empty components, `.`, and `..` are rejected. The decoder applies
+the path-component limit to target components and applies the path-byte and
+depth limits to the root-relative target obtained by joining the target to the
+symlink's parent path.
 
-## Resource Accounting
+Symlink targets remain data. The decoder never follows them on a host. The
+resulting closed tree graph additionally rejects cyclic symlink dependencies.
 
-Callers supply every ceiling. `tree/v1` limits remain hard maxima if a caller
-sets a larger value.
+## Path uniqueness and synthesized directories
 
-- Payload bytes are checked before the first read.
-- File bytes are checked before allocating or reading one file body.
-- Expanded file bytes are the sum of all logical regular-file sizes.
-- Entry count includes files, symlinks, explicit directories, and synthesized
-  parent directories; the root is excluded.
-- Path bytes, path depth, path-component bytes, and symlink-target bytes are
-  measured as UTF-8 bytes or component counts.
-- Metadata bytes count each 512-byte nonzero header and both terminator blocks.
-- Object bytes count unique retained bytes in each file, symlink, or tree object
-  map.
-- Read operations count every call to the caller-supplied `Read`, including
-  interrupted retries and the final EOF probe.
-- One work unit is charged per header or terminator block, path or target
-  component, file data record, and canonical tree entry constructed.
+Each normalized path may have at most one explicit archive entry. Descendants
+may first cause a parent directory to be synthesized; one later explicit
+directory entry for that path is allowed and sets its mode. A second explicit
+entry is a duplicate.
 
-All counters use saturating failure semantics. File bodies are read in fixed
-chunks only after per-file and aggregate expanded limits pass. The final object
-set may remain in memory within the declared limits.
+A file or symlink cannot have a descendant. A non-directory cannot replace a
+directory, and it cannot replace a synthesized directory that already has
+descendants. These collision rules apply regardless of archive order.
+
+## Canonical object construction
+
+The root and every synthesized directory start with mode `0755`. A later
+explicit directory entry replaces a synthesized directory's mode.
+
+Modes contain permission bits only:
+
+- A regular-file mode must fit within `0777` and retain owner read (`0400`).
+- A directory mode must fit within `0777` and retain owner read and search
+  (`0500`).
+- A symlink header mode must be exactly `0777`, which is the fixed `tree/v1`
+  symlink mode.
+
+The decoder retains accepted regular-file and directory permission bits
+exactly. Ownership and timestamp metadata do not enter any object encoding.
+
+Regular-file contents become canonical, domain-separated `tree/v1` file object
+bytes. Symlink targets become canonical `SymlinkObjectV1` bytes. For each
+directory, direct children are sorted by their exact UTF-8 name bytes and
+encoded into canonical `TreeObjectV1` bytes. Trees are built bottom-up.
+
+Each complete canonical byte sequence is addressed by its SHA-256 digest. Equal
+file contents therefore share one retained file object identity, but every
+archive placement remains a separate logical entry and is charged separately.
+Hard-link topology is never preserved.
+
+A successful result contains the unique retained file, symlink, and tree object
+bytes and digests; a closed, validated `TreeGraphV1`; its root tree digest; and
+provenance containing the exact declaration and decoder identity. Distinct
+bytes under one digest, including across object kinds, are rejected as an
+object-digest collision.
+
+Archive order and accepted UID, GID, ownership-name, and mtime values do not
+change canonical object bytes. They do change the declared payload identity
+when their input bytes differ.
+
+## Resource limits and accounting
+
+Callers supply every ceiling through `ArchiveLimitsV1`. A zero ceiling is valid
+and rejects any input that consumes that resource. Limits are inclusive: use
+equal to a ceiling is accepted. The corresponding `tree/v1` maximum remains a
+hard upper bound when the caller supplies a larger value.
+
+| Resource | Default ceiling | Accounting rule |
+| --- | ---: | --- |
+| Payload bytes | 384 MiB | Check `payload_byte_len` before the first read. |
+| File bytes | 256 MiB | Check each logical regular-file size before allocating or reading its body. The `tree/v1` per-file maximum is also 256 MiB. |
+| Expanded file bytes | 256 MiB | Sum every logical regular-file size, including repeated equal contents. The `tree/v1` aggregate maximum is also 256 MiB. |
+| Entries | 100,000 | Count files, symlinks, explicit directories, and synthesized parent directories. Exclude the root. The `tree/v1` maximum is also 100,000. |
+| Path bytes | 4,096 | Measure UTF-8 bytes in each slash-joined entry path and resolved symlink target. The `tree/v1` maximum is also 4,096. |
+| Path depth | 64 | Count components in each entry path and resolved symlink target. The `tree/v1` maximum is also 64. |
+| Path-component bytes | 255 | Measure UTF-8 bytes in each entry-path and symlink-target component. The `tree/v1` maximum is also 255. |
+| Symlink-target bytes | 4,096 | Measure UTF-8 bytes in the target text before object construction. The `tree/v1` maximum is also 4,096. |
+| Metadata bytes | 64 MiB | Charge 512 bytes for every nonzero header and for each of the two terminator records. |
+| Object bytes | 384 MiB | Sum unique canonical bytes retained in the file, symlink, and tree object maps. Repeated identical objects are charged once. |
+| Read operations | 402,653,185 | Count every call to the caller-supplied `Read`, including interrupted attempts, retries, draining, and the final EOF probe. This default is 384 MiB plus one. |
+| Work units | 10,000,000 | Charge one per header or terminator record, path or target component, file data record, and canonical tree entry constructed. |
+
+One file data record is each started 512-byte record of declared file content;
+a zero-byte file charges no file-data-record work. File bodies are read into
+memory in fixed chunks of at most 8,192 bytes only after both per-file and
+expanded-file limits pass.
+
+All counter additions fail with saturating semantics rather than wrapping. The
+final unique object set may remain in memory only within the declared limits.
+
+## Rejection and compatibility
+
+The decoder fails closed on declaration mismatch, payload truncation, trailing
+bytes, digest mismatch, I/O failure, malformed framing or headers, unsupported
+entry types or metadata forms, unsafe or colliding paths, invalid modes,
+nonzero padding, unsafe symlink targets, object or graph inconsistency, and any
+resource-limit violation. It never repairs, normalizes, guesses, or partially
+publishes rejected input.
+
+Version 1 fixes this complete behavior, including accepted bytes, validation
+order that affects reading and accounting, canonical outputs, and decoder
+identity. An incompatible change requires a new version.

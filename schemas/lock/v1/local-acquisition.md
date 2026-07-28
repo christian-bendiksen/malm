@@ -1,68 +1,73 @@
-# lock/v1 Root And Local Graph Acquisition
+# Root and local graph acquisition (`lock/v1`)
 
-## Scope
+The local-only `lock/v1` acquisition operation verifies and publishes every
+`Root` and `Local` node in an already validated `LockV1`, then invokes the
+offline module-graph assembler. Prepare and embedding code use it when the
+reviewed graph contains no Git source.
 
-Local graph acquisition verifies and publishes every `Root` and `Local` node in
-an already validated `LockV1`, then invokes the offline module
-graph assembler. It does not create or update a lock, use Git or the network,
-parse deployment configuration, or write any graph-specific persistent record.
+It does not create or update a lock, use Git or the network, parse deployment
+configuration, or write a graph-specific persistent record.
 
-Inputs are:
+## Inputs and authority
 
-- One explicit absolute root-pack directory.
-- One validated complete lock.
-- An explicit set of granted `LocalLocator` values.
+The caller supplies one explicit absolute root-pack directory, one validated
+complete lock, and an exact set of granted `LocalLocator` values. Publication
+requires a ready read-write store.
 
-The root source is the caller-selected authority and is implicitly granted.
-Every `Local` lock node, including a locator that does not escape the root,
-must appear in the exact grant set. This conservative adapter boundary keeps
-interactive or organization-specific policy outside Engine and ensures that no
-local filesystem authority is inferred from lock contents alone.
+The caller-selected root is implicitly granted. Every `Local` node must appear
+in the grant set, even when its locator stays within the root. This conservative
+boundary keeps interactive or organization-specific policy outside Engine and
+prevents lock contents from granting local filesystem authority by themselves.
 
 ## Preflight
 
-Before any source read or CAS mutation, the operation scans the complete lock:
+Before any source read or CAS mutation, the operation scans the complete lock.
+It rejects a local locator that is absent from the grant set and rejects every
+Git node as unsupported by this local-only operation.
 
-- Every local locator must be explicitly granted.
-- Any Git node is rejected as unsupported by this local-only operation.
+A missing grant or mixed Git graph therefore cannot publish even the root
+object as a side effect. The [exact Git adapter](git-acquisition.md) shares the
+downstream CAS and verification stages. The general [complete graph adapter](graph-acquisition.md)
+composes both source kinds; this operation remains intentionally local-only.
 
-Consequently, a missing grant or mixed Git graph cannot publish even the root
-object as a side effect. The separate [exact Git adapter](git-acquisition.md)
-shares the downstream CAS and verification stages. The general
-[`graph-acquisition`](graph-acquisition.md) operation composes both source kinds;
-this narrower operation remains intentionally local-only.
+## Root-relative resolution
 
-## Root-Relative Resolution
+Every local locator is resolved lexically from the root-pack directory, never
+from the directory of the pack that declares the dependency. `.` selects the
+root directory. Leading `..` components walk upward from that directory, and
+all remaining components walk downward.
 
-Every local locator is resolved lexically from the root pack directory, never
-from the directory of the pack declaring the dependency. `.` selects the root
-directory. Leading `..` components walk upward from the root directory, and all
-remaining components walk downward. `LocalLocator` validation has already
-rejected absolute paths, internal parent segments, dot segments, empty segments,
-backslashes, controls, and reserved `.git`, `malm.lock`, or `.malm-lock.tmp`
-components.
+A validated `LocalLocator` is at most 4,096 UTF-8 bytes and 64 segments.
+Validation has already rejected absolute paths, internal parent segments, dot
+segments other than the single `.`, empty segments, backslashes, control
+characters, and `.git`, `malm.lock`, or `.malm-lock.tmp` components.
 
-The resulting absolute path is passed to the `pack/v1` local source-capture
-adapter, which independently rejects symbolic path components, state-root
-overlap, nested mounts, unsafe entries, unstable observations, and digest drift.
+The operation passes the resulting absolute path to the `pack/v1`
+[local source-capture adapter](../../pack/v1/source-capture.md). That adapter
+independently rejects symbolic path components, state-root overlap, nested
+mounts, unsafe entries, unstable observations, and digest drift.
 
-## Acquisition Sequence
+## Acquisition sequence
 
-After preflight, the operation:
-
-1. Recaptures and publishes the root node at its locked content digest.
-2. Resolves, recaptures, and publishes every local node at its locked digest.
-3. Loads all resulting objects through the read-only CAS capability.
-4. Re-verifies pack bytes, strict manifests, declared files, component digests,
+1. Recapture and publish the root at its locked content digest.
+2. Resolve, recapture, and publish every local node at its locked digest.
+3. Load all resulting objects through the read-only CAS capability.
+4. Re-verify pack bytes, strict manifests, declared files, component digests,
    package identities, source identities, dependency aliases, and target nodes.
-5. Returns the complete graph in deterministic dependency-before-importer
-   order with the validated lock retained as provenance.
+5. Return the complete graph in deterministic dependency-before-importer order,
+   retaining the validated lock as provenance.
+
+The assembler permits at most 1 GiB of unique verified pack-file bytes and
+65,536 module-scope entries. Each source also remains subject to all `pack/v1`
+capture limits.
+
+## Cache and failure semantics
 
 A valid CAS hit never suppresses local capture. Current drift or a missing local
-origin fails even when the old locked object remains available for explicitly
+origin fails even when the old locked object remains available to explicitly
 offline consumers. Normal acquisition never rewrites `malm.lock`.
 
-CAS publication is content-addressed rather than transaction-scoped. If a later
-node fails after earlier matching nodes were published, those independently
-valid immutable objects may remain as unreferenced cache entries; no assembled
-graph or lock update is published.
+CAS publication is content-addressed, not transaction-scoped. If a later node
+fails after earlier matching nodes were published, those independently valid
+immutable objects may remain as unreferenced cache entries. No assembled graph
+or lock update is published.
