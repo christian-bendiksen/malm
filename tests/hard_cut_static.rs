@@ -19,7 +19,6 @@ const REMOVED_PRODUCTION_SPELLINGS: &[&str] = &[
 const REMOVED_DIRECT_DEPENDENCIES: &[&str] = &[
     "dag",
     "dirs",
-    "flate2",
     "globset",
     "miette",
     "owo-colors",

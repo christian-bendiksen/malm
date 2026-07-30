@@ -525,13 +525,16 @@ fn lower_asset(
         }
     }
 
-    let tar = match asset.format.as_str() {
-        "tar" => payload.to_vec(),
-        "tar-xz" => decompress_xz(name, payload)?,
+    // The decompressor tag is part of the plan identity, so it must name the
+    // format actually applied; a plain tar decompresses through nothing.
+    let (tar, decompressor) = match asset.format.as_str() {
+        "tar" => (payload.to_vec(), &b"none/1"[..]),
+        "tar-xz" => (decompress_xz(name, payload)?, &b"xz/1"[..]),
+        "tar-gz" => (decompress_gz(name, payload)?, &b"gz/1"[..]),
         other => {
             return Err(StaticPrepareError::InvalidConfig(format!(
                 "asset `{name}`: format `{other}` is not supported for deployment yet \
-                 (supported: tar, tar-xz)"
+                 (supported: tar, tar-xz, tar-gz)"
             )));
         }
     };
@@ -547,7 +550,7 @@ fn lower_asset(
     .map_err(StaticPrepareError::Archive)?;
 
     let mut decompressor_identity = DECOMPRESSOR_INPUT_DOMAIN.to_vec();
-    decompressor_identity.extend_from_slice(b"xz/1");
+    decompressor_identity.extend_from_slice(decompressor);
     inputs.push(
         PrepareInputV1::new(
             PrepareInputKindV1::Other,
@@ -589,33 +592,53 @@ fn lower_asset(
 }
 
 /// Enforces the decompressed-size limit in the sink, before memory can grow past it.
-fn decompress_xz(name: &str, payload: &[u8]) -> Result<Vec<u8>, StaticPrepareError> {
-    struct BoundedSink {
-        bytes: Vec<u8>,
-        limit: u64,
-    }
-    impl std::io::Write for BoundedSink {
-        fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
-            let projected = (self.bytes.len() as u64).saturating_add(chunk.len() as u64);
-            if projected > self.limit {
-                return Err(std::io::Error::other("decompressed payload exceeds limit"));
-            }
-            self.bytes.extend_from_slice(chunk);
-            Ok(chunk.len())
-        }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
+///
+/// Every compressed asset format writes through this, so one bound covers them all.
+struct BoundedSink {
+    bytes: Vec<u8>,
+    limit: u64,
+}
 
+impl BoundedSink {
+    fn new() -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit: MAX_DECOMPRESSED_ASSET_BYTES,
+        }
+    }
+}
+
+impl std::io::Write for BoundedSink {
+    fn write(&mut self, chunk: &[u8]) -> std::io::Result<usize> {
+        let projected = (self.bytes.len() as u64).saturating_add(chunk.len() as u64);
+        if projected > self.limit {
+            return Err(std::io::Error::other("decompressed payload exceeds limit"));
+        }
+        self.bytes.extend_from_slice(chunk);
+        Ok(chunk.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn decompress_xz(name: &str, payload: &[u8]) -> Result<Vec<u8>, StaticPrepareError> {
     let mut reader = std::io::BufReader::new(Cursor::new(payload));
-    let mut sink = BoundedSink {
-        bytes: Vec::new(),
-        limit: MAX_DECOMPRESSED_ASSET_BYTES,
-    };
+    let mut sink = BoundedSink::new();
     lzma_rs::xz_decompress(&mut reader, &mut sink).map_err(|error| {
         StaticPrepareError::InvalidConfig(format!(
             "asset `{name}`: xz decompression failed: {error}"
+        ))
+    })?;
+    Ok(sink.bytes)
+}
+
+fn decompress_gz(name: &str, payload: &[u8]) -> Result<Vec<u8>, StaticPrepareError> {
+    let mut reader = flate2::read::GzDecoder::new(Cursor::new(payload));
+    let mut sink = BoundedSink::new();
+    std::io::copy(&mut reader, &mut sink).map_err(|error| {
+        StaticPrepareError::InvalidConfig(format!(
+            "asset `{name}`: gzip decompression failed: {error}"
         ))
     })?;
     Ok(sink.bytes)

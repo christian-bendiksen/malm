@@ -67,6 +67,15 @@ Engine depends on both preparation crates and `malm-commit`, but calls into the
 commit layer only with verified saved data. The component adapter points toward
 Engine to implement its port; Engine never depends on the adapter or host.
 
+Engine decompresses vendored assets in process, with `lzma-rs` for `tar-xz` and
+`flate2` for `tar-gz`. Both are pure Rust and both write through one bounded sink
+that stops at the decompressed-size limit before memory grows, so neither format
+widens what an asset can do. `flate2` was previously a removed dependency; it is
+declared again deliberately, because gzip and xz are both ordinary ways to ship a
+third-party archive and the authoring validator must not advertise a format the
+engine cannot deploy. Shelling out to `gzip` or `xz` is not an option here —
+`tests/dependency_boundaries.rs` confines `Command::new` to the Git port.
+
 ## Enforcement
 
 `tests/dependency_boundaries.rs` reads Cargo metadata and checks workspace

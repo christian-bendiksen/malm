@@ -750,10 +750,7 @@ pub enum PackTreeError {
     #[error("duplicate pack path {0:?}")]
     DuplicatePath(PackPath),
     #[error("pack tree contains {actual} entries; limit is {limit}")]
-    TooManyEntries {
-        limit: usize,
-        actual: usize,
-    },
+    TooManyEntries { limit: usize, actual: usize },
     #[error("pack file {path:?} is {actual} bytes; limit is {limit}")]
     FileTooLarge {
         path: PackPath,
@@ -761,10 +758,7 @@ pub enum PackTreeError {
         actual: u64,
     },
     #[error("pack tree is {actual} bytes; limit is {limit}")]
-    TreeTooLarge {
-        limit: u64,
-        actual: u64,
-    },
+    TreeTooLarge { limit: u64, actual: u64 },
 }
 
 /// Applies the pack/v1 source-tree exclusions to a path.

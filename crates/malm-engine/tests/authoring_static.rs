@@ -662,11 +662,15 @@ mod asset_fixture {
         header
     }
 
-    /// Returns an xz-compressed tar with `theme/colors.conf` inside.
-    pub fn payload() -> (Vec<u8>, &'static [u8]) {
+    /// Returns a tar with `theme/colors.conf` inside.
+    ///
+    /// The directory entry carries the conventional trailing slash every ordinary
+    /// tar writer emits, so the whole prepare and commit path exercises the real
+    /// spelling rather than only the strictly canonical one.
+    fn tar() -> (Vec<u8>, &'static [u8]) {
         const CONTENT: &[u8] = b"accent=teal\n";
         let mut tar = Vec::new();
-        tar.extend_from_slice(&header(b"theme", 0o755, 0, b'5'));
+        tar.extend_from_slice(&header(b"theme/", 0o755, 0, b'5'));
         tar.extend_from_slice(&header(
             b"theme/colors.conf",
             0o644,
@@ -676,15 +680,29 @@ mod asset_fixture {
         tar.extend_from_slice(CONTENT);
         tar.resize(tar.len() + (BLOCK - CONTENT.len() % BLOCK), 0);
         tar.resize(tar.len() + 2 * BLOCK, 0);
+        (tar, CONTENT)
+    }
+
+    /// Returns an xz-compressed tar with `theme/colors.conf` inside.
+    pub fn payload() -> (Vec<u8>, &'static [u8]) {
+        let (tar, content) = tar();
         let mut compressed = Vec::new();
         lzma_rs::xz_compress(&mut std::io::Cursor::new(&tar), &mut compressed).unwrap();
-        (compressed, CONTENT)
+        (compressed, content)
+    }
+
+    /// Returns a gzip-compressed tar with the same tree inside.
+    pub fn gzip_payload() -> (Vec<u8>, &'static [u8]) {
+        use std::io::Write as _;
+
+        let (tar, content) = tar();
+        let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+        encoder.write_all(&tar).unwrap();
+        (encoder.finish().unwrap(), content)
     }
 }
 
-#[test]
-fn vendored_assets_deploy_as_archive_trees() {
-    let (compressed, content) = asset_fixture::payload();
+fn deploy_vendored_asset(format: &str, vendored: &str, compressed: Vec<u8>, content: &[u8]) {
     let sha256 = {
         let digest = Digest::sha256(&compressed);
         digest.as_str()["sha256-".len()..].to_owned()
@@ -695,11 +713,11 @@ fn vendored_assets_deploy_as_archive_trees() {
 
 assets {{
     asset "theme-pack" {{
-        url "https://example.com/theme.tar.xz"
+        url "https://example.com/theme"
         dst "~/.local/share/themes"
-        format "tar-xz"
+        format "{format}"
         sha256 "{sha256}"
-        path "vendor/theme.tar.xz"
+        path "{vendored}"
     }}
 }}
 
@@ -724,7 +742,7 @@ profile "calm" {{
         vec![],
         vec![],
         vec![],
-        vec![PackPath::new("vendor/theme.tar.xz").unwrap()],
+        vec![PackPath::new(vendored).unwrap()],
         vec![],
     )
     .unwrap()
@@ -739,7 +757,7 @@ profile "calm" {{
             PackPath::new(malm_config::CONFIG_FILE).unwrap(),
             root_config.into_bytes(),
         ),
-        PackFileV1::new(PackPath::new("vendor/theme.tar.xz").unwrap(), compressed),
+        PackFileV1::new(PackPath::new(vendored).unwrap(), compressed),
     ];
     let content_digest =
         pack_content_digest(files.iter().map(|file| (file.path(), file.bytes()))).unwrap();
@@ -782,6 +800,18 @@ profile "calm" {{
         fs::read_to_string(target.join(".config/noop/marker.conf")).unwrap(),
         "present\n"
     );
+}
+
+#[test]
+fn vendored_assets_deploy_as_archive_trees() {
+    let (compressed, content) = asset_fixture::payload();
+    deploy_vendored_asset("tar-xz", "vendor/theme.tar.xz", compressed, content);
+}
+
+#[test]
+fn vendored_gzip_assets_deploy_as_archive_trees() {
+    let (compressed, content) = asset_fixture::gzip_payload();
+    deploy_vendored_asset("tar-gz", "vendor/theme.tar.gz", compressed, content);
 }
 
 #[test]

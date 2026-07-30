@@ -29,17 +29,12 @@ the new deployment is working as expected.
 
 ## Start Fresh
 
-The state parent must already exist before initialization. It must be owned by
-the current user, have no special permission bits, and have no group or other
-write permission. When `XDG_STATE_HOME` is set, it must be an absolute,
-normalized path. An invalid set value is an error; Malm does not fall back to
-`$HOME/.local/state`.
-
-For example, to create a new private parent at the default fallback path:
-
-```sh
-install -d -m 0700 -- "$HOME/.local/state"
-```
+A missing state parent is created by `malm store init` itself (mode 0700). An
+existing parent must be owned by the current user, have no special permission
+bits, and have no group or other write permission; the same rules apply to the
+deepest existing ancestor when the parent is created. When `XDG_STATE_HOME` is
+set, it must be an absolute, normalized path. An invalid set value is an error;
+Malm does not fall back to `$HOME/.local/state`.
 
 Initialize an empty state directory:
 

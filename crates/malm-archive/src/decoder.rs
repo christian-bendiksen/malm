@@ -608,7 +608,10 @@ fn parse_header(
         }
     }
 
-    let path = parse_header_path(block, block_index)?;
+    let mut path = parse_header_path(block, block_index)?;
+    if typeflag == b'5' {
+        strip_directory_trailing_slash(&mut path);
+    }
     let components = validate_path(&path, block_index, state)?;
     let link = field_bytes(&block[157..257], block_index, HeaderField::LinkName)?;
     let kind = match typeflag {
@@ -986,6 +989,18 @@ fn parse_header_path(
     }
 }
 
+/// Drops the conventional single trailing slash from a POSIX directory name.
+///
+/// Only one slash is removed, and only when a nonempty remainder that does not
+/// itself end in a slash survives, so `"/"`, `"//"`, and `"dir//"` still reach
+/// the unchanged path rules and still fail there. The normalized path is what
+/// every later rule, path budget, and duplicate check sees.
+fn strip_directory_trailing_slash(path: &mut String) {
+    if path.len() > 1 && path.ends_with('/') && !path.ends_with("//") {
+        path.pop();
+    }
+}
+
 fn validate_path(
     path: &str,
     block_index: u64,
@@ -1124,17 +1139,11 @@ fn verify_checksum(
     block: &[u8; USTAR_BLOCK_BYTES],
     block_index: u64,
 ) -> Result<(), ArchiveDecodeError> {
-    let field = &block[148..156];
-    if field[6] != 0
-        || field[7] != b' '
-        || !field[..6].iter().all(|byte| matches!(*byte, b'0'..=b'7'))
-    {
-        return malformed_header(
-            block_index,
-            "checksum field is not six octal digits, NUL, space",
-        );
-    }
-    let stored = parse_octal_digits(&field[..6], block_index, HeaderField::Checksum)?;
+    // POSIX terminates the checksum like any other numeric field, so the six
+    // digits, NUL, space form is one accepted spelling among several. The
+    // computed sum stays unsigned with the field read as eight spaces; the
+    // historical signed sum is not a second accepted encoding.
+    let stored = parse_octal(&block[148..156], block_index, HeaderField::Checksum)?;
     let computed = block
         .iter()
         .enumerate()
@@ -1177,13 +1186,13 @@ enum HeaderField {
 impl HeaderField {
     const fn numeric_reason(self) -> &'static str {
         match self {
-            Self::Mode => "mode is not a fixed-width NUL-terminated octal field",
-            Self::Uid => "uid is not a fixed-width NUL-terminated octal field",
-            Self::Gid => "gid is not a fixed-width NUL-terminated octal field",
-            Self::Size => "size is not a fixed-width NUL-terminated octal field",
-            Self::Mtime => "mtime is not a fixed-width NUL-terminated octal field",
-            Self::DeviceMajor => "device major is not an empty or fixed-width octal field",
-            Self::DeviceMinor => "device minor is not an empty or fixed-width octal field",
+            Self::Mode => "mode is not an octal field terminated by NUL or space",
+            Self::Uid => "uid is not an octal field terminated by NUL or space",
+            Self::Gid => "gid is not an octal field terminated by NUL or space",
+            Self::Size => "size is not an octal field terminated by NUL or space",
+            Self::Mtime => "mtime is not an octal field terminated by NUL or space",
+            Self::DeviceMajor => "device major is not a blank or terminated octal field",
+            Self::DeviceMinor => "device minor is not a blank or terminated octal field",
             Self::Checksum => "checksum field is invalid",
             _ => "numeric field is invalid",
         }
@@ -1209,17 +1218,28 @@ impl HeaderField {
     }
 }
 
+/// Parses one POSIX ustar numeric field.
+///
+/// POSIX terminates a numeric field with one or more NUL or space bytes and
+/// permits leading spaces, so the accepted shape is `space* digit+ (NUL|space)+`
+/// across the exact field width. Requiring at least one terminator keeps the
+/// digit run shorter than the field, so one field can never carry two numbers
+/// and a GNU base-256 escape can never begin one.
 fn parse_octal(
     field: &[u8],
     block_index: u64,
     name: HeaderField,
 ) -> Result<u64, ArchiveDecodeError> {
-    let Some((&terminator, digits)) = field.split_last() else {
-        return malformed_header(block_index, "empty numeric field");
-    };
-    if terminator != 0
-        || digits.is_empty()
-        || !digits.iter().all(|byte| matches!(*byte, b'0'..=b'7'))
+    let leading_spaces = field.iter().take_while(|byte| **byte == b' ').count();
+    let body = &field[leading_spaces..];
+    let digit_len = body
+        .iter()
+        .take_while(|byte| matches!(**byte, b'0'..=b'7'))
+        .count();
+    let (digits, terminator) = body.split_at(digit_len);
+    if digits.is_empty()
+        || terminator.is_empty()
+        || terminator.iter().any(|byte| !matches!(*byte, 0 | b' '))
     {
         return Err(ArchiveDecodeError::MalformedHeader {
             block: block_index,
@@ -1234,7 +1254,10 @@ fn parse_optional_octal(
     block_index: u64,
     name: HeaderField,
 ) -> Result<u64, ArchiveDecodeError> {
-    if field.iter().all(|byte| *byte == 0) {
+    // POSIX leaves the device fields unspecified for non-device entries, and
+    // writers emit them blank as all NUL or all space. Either blank form means
+    // absent; the caller still requires the decoded value to be zero.
+    if field.iter().all(|byte| matches!(*byte, 0 | b' ')) {
         Ok(0)
     } else {
         parse_octal(field, block_index, name)

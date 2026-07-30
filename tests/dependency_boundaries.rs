@@ -254,6 +254,7 @@ const RULES: &[PackageRule] = &[
             "malm-types",
         ],
         allowed_external: &[
+            "flate2",
             "getrandom",
             "hex",
             "libc",

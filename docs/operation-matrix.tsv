@@ -1,13 +1,13 @@
 cli_operation	cli_engine_operations	machine_operation	machine_engine_operations	class
-deploy	prepare_static_deployment_v1,commit_v1	none	none	mutation-write
+deploy	prepare_static_deployment_v1,commit_v1,store_status	none	none	mutation-write
 source check	none	none	none	read-only-inspection
 source render	none	none	none	host-write-export
 source vars	none	none	none	read-only-inspection
-source lock create	create_lock_v1	none	none	lock-with-acquisition
-source lock update	update_lock_v1	none	none	lock-with-acquisition
-plan create	prepare_static_deployment_v1	prepare	prepare_v1	prepare-with-acquisition
-plan track	prepare_tracked_root_v1	none	none	prepare-with-acquisition
-plan refresh	update_tracked_root_v1	none	none	prepare-with-acquisition
+source lock create	create_lock_v1,store_status	none	none	lock-with-acquisition
+source lock update	update_lock_v1,store_status	none	none	lock-with-acquisition
+plan create	prepare_static_deployment_v1,store_status	prepare	prepare_v1	prepare-with-acquisition
+plan track	prepare_tracked_root_v1,store_status	none	none	prepare-with-acquisition
+plan refresh	update_tracked_root_v1,store_status	none	none	prepare-with-acquisition
 plan switch-profile	prepare_profile_switch_v1	none	none	prepare-only
 plan restore	prepare_checkout_v1,inspect_generation_inventory_v1	checkout	prepare_checkout_v1	prepare-only
 plan disable	prepare_disable_v1	disable	prepare_disable_v1	prepare-only
@@ -20,7 +20,7 @@ plan retention restore-point add	prepare_retention_authority_v1,inspect_generati
 plan retention restore-point drop	prepare_retention_authority_v1,inspect_generation_inventory_v1	drop_restore_point	prepare_retention_authority_v1	prepare-only
 plan list	inspect_plan_index_v1,inspect_plan_v1	none	none	read-only-inspection
 plan show	inspect_plan_v1,inspect_plan_index_v1	plan	inspect_plan_v1	read-only-inspection
-plan apply	commit_v1,inspect_plan_v1,inspect_plan_index_v1	commit	commit_v1	mutation-write
+plan apply	commit_v1,inspect_plan_v1,inspect_plan_index_v1,store_status	commit	commit_v1	mutation-write
 plan delete	prune_v1,inspect_plan_index_v1	prune	prune_v1	mutation-write
 plan inputs	inspect_captured_inputs_v1,inspect_plan_index_v1	captured_inputs	inspect_captured_inputs_v1	read-only-inspection
 plan transforms	inspect_transform_provenance_v1,inspect_plan_index_v1	transform_provenance	inspect_transform_provenance_v1	read-only-inspection

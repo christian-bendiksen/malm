@@ -365,11 +365,13 @@ fn bounded(value: String) -> String {
 }
 
 fn error_code(error: &anyhow::Error) -> &'static str {
-    if let Some(error) = error.downcast_ref::<CommitError>() {
-        return commit_error_code(error);
-    }
-    if let Some(error) = error.downcast_ref::<EngineError>() {
-        return engine_error_code(error);
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<CommitError>() {
+            return commit_error_code(error);
+        }
+        if let Some(error) = cause.downcast_ref::<EngineError>() {
+            return engine_error_code(error);
+        }
     }
     let message = error.to_string();
     if message.contains("no durable plan") {
@@ -535,6 +537,19 @@ const fn commit_class_code(class: CommitErrorClass) -> &'static str {
 }
 
 fn engine_error_code(error: &EngineError) -> &'static str {
+    // The CLI names store-lifecycle failures directly so their remediation
+    // help fires; machine/v1 keeps its own vocabulary via
+    // `classify_engine_error`.
+    match error {
+        EngineError::StoreNotReady { .. } => return "store-not-ready",
+        EngineError::StateParentMissing { .. } => return "state-parent-missing",
+        EngineError::UnsafeDirectory { .. } => return "unsafe-directory",
+        EngineError::RootObservationChanged { .. }
+        | EngineError::StateParentObservationChanged { .. } => return "store-changed",
+        EngineError::MalformedStoreMetadata { .. } => return "corrupt-store",
+        EngineError::UnsupportedStoreVersion { .. } => return "unsupported-store-version",
+        _ => {}
+    }
     match classify_engine_error(error) {
         EngineErrorClass::ReadOnlyStore => "read-only-store",
         EngineErrorClass::PreparedMissingPlan => "plan-not-found",
@@ -585,6 +600,15 @@ fn error_help(code: &str) -> Option<&'static str> {
         }
         "stale-plan" => Some("Create and review a fresh plan before applying."),
         "store-not-ready" => Some("Initialize the store with `malm store init`."),
+        "state-parent-missing" => {
+            Some("Create the parent directory with mode 700, then re-run `malm store init`.")
+        }
+        "unsafe-directory" => Some(
+            "Fix the reported directory's owner and permissions (chown to your user, chmod 700), then retry.",
+        ),
+        "unsupported-store-version" => Some(
+            "This store was written by a different malm version; see docs/clean-reset.md before re-initializing.",
+        ),
         "plan-in-use" => Some("The plan is retained by namespace history or an explicit pin."),
         "profile-required" => {
             Some("Pass `--profile NAME` or declare a default profile in the source.")
@@ -600,7 +624,10 @@ mod classifier_tests {
     use std::path::PathBuf;
 
     use super::{CommitErrorClass, commit_class_code, commit_error_code, engine_error_code};
-    use crate::{CommitError, EngineError, OwnershipOverlapKindV1, PreparedStoreIssue};
+    use crate::{
+        CommitError, DirectorySafetyIssue, EngineError, OwnershipOverlapKindV1,
+        PreparedStoreIssue, StateDirectory, StoreMetadataIssue, StoreStatus,
+    };
     use malm_types::{ArtifactId, DeploymentName, Digest, NamespaceName, PreparedId};
 
     fn digest() -> Digest {
@@ -715,6 +742,53 @@ mod classifier_tests {
         };
         vec![
             (EngineError::ReadOnlyStore, "read-only-store"),
+            (
+                EngineError::StoreNotReady {
+                    status: StoreStatus::Absent,
+                },
+                "store-not-ready",
+            ),
+            (
+                EngineError::StateParentMissing {
+                    path: PathBuf::from("/state-parent"),
+                },
+                "state-parent-missing",
+            ),
+            (
+                EngineError::UnsafeDirectory {
+                    directory: StateDirectory::StateParent,
+                    path: PathBuf::from("/state-parent"),
+                    reason: DirectorySafetyIssue::GroupOrOtherWritable { mode: 0o775 },
+                },
+                "unsafe-directory",
+            ),
+            (
+                EngineError::RootObservationChanged {
+                    path: PathBuf::from("/state-parent/malm"),
+                },
+                "store-changed",
+            ),
+            (
+                EngineError::StateParentObservationChanged {
+                    path: PathBuf::from("/state-parent"),
+                },
+                "store-changed",
+            ),
+            (
+                EngineError::MalformedStoreMetadata {
+                    path: PathBuf::from("/state-parent/malm/descriptor.json"),
+                    reason: StoreMetadataIssue::MarkerMissingWithOtherEntries,
+                },
+                "corrupt-store",
+            ),
+            (
+                EngineError::UnsupportedStoreVersion {
+                    path: PathBuf::from("/state-parent/malm/descriptor.json"),
+                    expected: 1,
+                    found: 2,
+                },
+                "unsupported-store-version",
+            ),
             (prepared(PreparedStoreIssue::MissingPlan), "plan-not-found"),
             (
                 prepared(PreparedStoreIssue::MissingBlob),

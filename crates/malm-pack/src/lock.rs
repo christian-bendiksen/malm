@@ -240,15 +240,9 @@ impl LockedPackV1 {
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 pub enum LockValidationError {
     #[error("lock contains {actual} nodes; limit is {limit}")]
-    TooManyNodes {
-        limit: usize,
-        actual: usize,
-    },
+    TooManyNodes { limit: usize, actual: usize },
     #[error("lock contains {actual} edges; limit is {limit}")]
-    TooManyEdges {
-        limit: usize,
-        actual: usize,
-    },
+    TooManyEdges { limit: usize, actual: usize },
     #[error("locked node {collection} contains {actual} entries; limit is {limit}")]
     NodeLimitExceeded {
         collection: &'static str,
@@ -265,9 +259,7 @@ pub enum LockValidationError {
     #[error("root lock node {0} is missing")]
     MissingRoot(PackNodeId),
     #[error("lock must contain exactly one root source, found {actual}")]
-    RootSourceCount {
-        actual: usize,
-    },
+    RootSourceCount { actual: usize },
     #[error("root source belongs to {found}, not named root {expected}")]
     RootSourceMismatch {
         expected: PackNodeId,
@@ -302,10 +294,7 @@ pub enum LockValidationError {
     #[error("lock node {0} is unreachable from the root")]
     UnreachableNode(PackNodeId),
     #[error("lock node {node_id} disagrees with its manifest: {detail}")]
-    ManifestMismatch {
-        node_id: PackNodeId,
-        detail: String,
-    },
+    ManifestMismatch { node_id: PackNodeId, detail: String },
 }
 
 fn node_scope(node_id: &Option<PackNodeId>) -> String {
@@ -654,17 +643,11 @@ fn encode_source(encoder: &mut Encoder<'_>, source: &LockedSourceV1) {
 #[derive(Debug, thiserror::Error)]
 pub enum LockReadError {
     #[error("lock is {actual} bytes; limit is {limit}")]
-    TooLarge {
-        limit: usize,
-        actual: usize,
-    },
+    TooLarge { limit: usize, actual: usize },
     #[error("malformed lock/v1 JSON: {0}")]
     MalformedJson(String),
     #[error("unsupported lock schema: expected exactly {expected}, found {found}")]
-    UnsupportedVersion {
-        expected: u32,
-        found: u64,
-    },
+    UnsupportedVersion { expected: u32, found: u64 },
     #[error("invalid lock/v1 graph: {0}")]
     InvalidLock(#[source] LockValidationError),
 }

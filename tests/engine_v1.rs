@@ -573,6 +573,51 @@ fn writable_state_parent_is_rejected_before_creation() {
 }
 
 #[test]
+fn missing_state_parent_chain_is_created_with_private_mode() {
+    let temp = tempfile::tempdir().unwrap();
+    let state_home = temp.path().join("nested/state");
+    let engine = engine(&state_home, StoreAccess::ReadWrite);
+
+    assert_eq!(engine.store_status().unwrap(), StoreStatus::Absent);
+    assert!(!temp.path().join("nested").exists());
+
+    let outcome = engine.initialize_store().unwrap();
+    assert_eq!(outcome.status(), StoreStatus::Ready);
+    for directory in [&temp.path().join("nested"), &state_home] {
+        let mode = fs::metadata(directory).unwrap().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "{}", directory.display());
+    }
+    assert_eq!(engine.store_status().unwrap(), StoreStatus::Ready);
+}
+
+#[test]
+fn state_parent_is_not_created_beneath_an_unsafe_ancestor() {
+    let temp = tempfile::tempdir().unwrap();
+    let ancestor = create_state_home(temp.path(), "ancestor");
+    fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o770)).unwrap();
+    let state_home = ancestor.join("state");
+    let engine = engine(&state_home, StoreAccess::ReadWrite);
+
+    let error = engine.initialize_store().unwrap_err();
+    assert!(matches!(error, EngineError::StateParentMissing { .. }));
+    assert!(!state_home.exists());
+    fs::set_permissions(&ancestor, fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn state_parent_is_not_created_through_a_symlinked_ancestor() {
+    let temp = tempfile::tempdir().unwrap();
+    let real = create_state_home(temp.path(), "real");
+    let link = temp.path().join("link");
+    std::os::unix::fs::symlink(&real, &link).unwrap();
+    let engine = engine(&link.join("state"), StoreAccess::ReadWrite);
+
+    let error = engine.initialize_store().unwrap_err();
+    assert!(matches!(error, EngineError::Io { .. }));
+    assert!(!real.join("state").exists());
+}
+
+#[test]
 fn concurrent_initialization_creates_one_root() {
     let temp = tempfile::tempdir().unwrap();
     let state_home = create_state_home(temp.path(), "state");

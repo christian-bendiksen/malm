@@ -59,7 +59,7 @@ Normal command errors are written to standard error and return a nonzero exit st
 
 ## Set Up the Store
 
-Check whether Malm's state store is ready, then initialize it once if needed.
+Check whether Malm's state store is ready, then initialize it once if needed. `malm store init` also creates a missing state parent (for example `~/.local/state`) with mode 700, as long as its deepest existing ancestor is user-owned and private.
 
 ```sh
 malm store status

@@ -13,19 +13,13 @@ use crate::{
 #[derive(Debug, thiserror::Error)]
 pub enum PackReadError {
     #[error("pack manifest is {actual} bytes; limit is {limit}")]
-    TooLarge {
-        limit: usize,
-        actual: usize,
-    },
+    TooLarge { limit: usize, actual: usize },
     #[error("pack manifest is not UTF-8")]
     InvalidUtf8,
     #[error("malformed pack KDL: {0}")]
     MalformedKdl(String),
     #[error("unsupported pack schema: expected exactly {expected}, found {found}")]
-    UnsupportedVersion {
-        expected: u32,
-        found: i128,
-    },
+    UnsupportedVersion { expected: u32, found: i128 },
     #[error("invalid pack/v1 manifest: {0}")]
     InvalidManifest(String),
     #[error("invalid pack/v1 manifest: {0}")]

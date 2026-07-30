@@ -13,7 +13,7 @@ provenance projections. They are not tar input or persisted store records.
 
 | Classification | Contents | Expected result |
 | --- | --- | --- |
-| [`golden/`](golden/) | exact empty ustar payload, its payload and root-tree digests, and matching declaration and provenance projections | decode and validate exactly |
+| [`golden/`](golden/) | exact empty and POSIX-variant ustar payloads, their payload and root-tree digests, and matching declaration and provenance projections | decode and validate exactly |
 | [`valid/`](valid/) | accepted declaration and provenance projections for the golden payload | validate against the corresponding schema |
 | [`malformed/`](malformed/) | a declaration with an unknown field, provenance with an invalid decoder name, and a one-record terminator payload | reject |
 | [`unsupported/`](unsupported/) | declaration and provenance projections selecting `schema_version: 2` | reject as unsupported by the version 1 schemas |
@@ -24,6 +24,14 @@ zero bytes: two 512-byte terminator records and no entries. Its
 canonical empty root-tree digest. The golden declaration and provenance bind
 those values to `malm.posix-ustar.none` version `1`. The files under `valid/`
 currently repeat those accepted semantic projections.
+
+[`golden/posix-variant-ustar.hex`](golden/posix-variant-ustar.hex) is a
+two-entry archive written the way ordinary tar writers emit one: space-terminated
+and short numeric fields, leading spaces, blank device fields, two different
+checksum spellings, and a directory entry carrying the conventional trailing
+slash. Its root-tree digest equals the digest of the strictly written archive
+holding the same tree, which is what makes the accepted profile wider than the
+canonical writing without changing any canonical output.
 
 [`malformed/single-zero-block.hex`](malformed/single-zero-block.hex) is exactly
 one 512-byte zero record. When decoded under a declaration matching its own

@@ -77,20 +77,20 @@ based; widths are bytes.
 | Offset | Width | Field | Required representation |
 | ---: | ---: | --- | --- |
 | 0 | 100 | name | bounded text field |
-| 100 | 8 | mode | 7 octal digits, then NUL |
-| 108 | 8 | UID | 7 octal digits, then NUL |
-| 116 | 8 | GID | 7 octal digits, then NUL |
-| 124 | 12 | size | 11 octal digits, then NUL |
-| 136 | 12 | mtime | 11 octal digits, then NUL |
-| 148 | 8 | checksum | 6 octal digits, NUL, space |
+| 100 | 8 | mode | terminated octal number |
+| 108 | 8 | UID | terminated octal number |
+| 116 | 8 | GID | terminated octal number |
+| 124 | 12 | size | terminated octal number |
+| 136 | 12 | mtime | terminated octal number |
+| 148 | 8 | checksum | terminated octal number |
 | 156 | 1 | typeflag | one allowed byte listed below |
 | 157 | 100 | link name | bounded text field |
 | 257 | 6 | magic | exact bytes `ustar\0` |
 | 263 | 2 | version | exact bytes `00` |
 | 265 | 32 | user name | bounded text field |
 | 297 | 32 | group name | bounded text field |
-| 329 | 8 | device major | all NUL, or 7 octal digits and NUL encoding zero |
-| 337 | 8 | device minor | all NUL, or 7 octal digits and NUL encoding zero |
+| 329 | 8 | device major | blank, or a terminated octal number encoding zero |
+| 337 | 8 | device minor | blank, or a terminated octal number encoding zero |
 | 345 | 155 | prefix | bounded text field |
 | 500 | 12 | reserved | all zero |
 
@@ -98,9 +98,18 @@ A bounded text field either occupies its complete field or ends at its first
 NUL. If it contains a NUL, every byte from that NUL through the end of the field
 must also be NUL.
 
+A terminated octal number is zero or more leading spaces, then one or more
+octal digits `0` through `7`, then one or more terminator bytes, each NUL or
+space, filling the exact field width. A field must contain at least one digit
+and at least one terminator, so an absent terminator, a digit run preceded by
+anything but spaces, and any byte after the first terminator that is neither
+NUL nor space are all rejected. One numeric field therefore never carries two
+numbers. A blank field contains only NUL and space bytes; only the device
+fields accept it, and it means zero.
+
 The checksum is the unsigned sum of all header bytes after treating all eight
-checksum-field bytes as spaces. GNU base-256 numbers and space-terminated
-numeric fields are not accepted.
+checksum-field bytes as spaces. The historical signed sum is not a second
+accepted encoding, and GNU base-256 numbers are not accepted.
 
 User and group names may be empty. If present, they must be control-free UTF-8.
 The decoder validates and then ignores UID, GID, user name, group name, and
@@ -115,6 +124,12 @@ Only these typeflags are accepted:
 '2' symbolic link
 '5' directory
 ```
+
+A directory entry may carry the conventional single trailing slash on its
+joined path. The decoder removes exactly one trailing slash, and only from a
+directory path, before applying every path rule and path budget below. It
+removes nothing when the remainder would be empty or would itself end in a
+slash, so `/`, `//`, and `dir//` still fail. No other entry type is normalized.
 
 The historical NUL regular-file typeflag is not accepted. The decoder also
 rejects all of the following:
@@ -142,7 +157,9 @@ name alone. The resulting path must be nonempty, UTF-8, and relative.
 
 Each slash-separated path component must be nonempty and must not be `.` or
 `..`. A component may not contain slash, backslash, NUL, or any Unicode control
-character. These rules reject leading, repeated, and trailing slashes.
+character. These rules reject leading and repeated slashes everywhere, and
+reject a trailing slash on every entry except the normalized directory form
+described under entry types.
 
 The decoder does not percent-decode, normalize Unicode, fold case, parse a host
 path, convert separators, or otherwise transform a path.
@@ -162,7 +179,8 @@ resulting closed tree graph additionally rejects cyclic symlink dependencies.
 Each normalized path may have at most one explicit archive entry. Descendants
 may first cause a parent directory to be synthesized; one later explicit
 directory entry for that path is allowed and sets its mode. A second explicit
-entry is a duplicate.
+entry is a duplicate. A directory named `dir/` and one named `dir` are the same
+path, so the second of them is that duplicate.
 
 A file or symlink cannot have a descendant. A non-directory cannot replace a
 directory, and it cannot replace a synthesized directory that already has
@@ -240,9 +258,13 @@ The decoder fails closed on declaration mismatch, payload truncation, trailing
 bytes, digest mismatch, I/O failure, malformed framing or headers, unsupported
 entry types or metadata forms, unsafe or colliding paths, invalid modes,
 nonzero padding, unsafe symlink targets, object or graph inconsistency, and any
-resource-limit violation. It never repairs, normalizes, guesses, or partially
-publishes rejected input.
+resource-limit violation. Apart from removing one trailing slash from a
+directory path, it never repairs, normalizes, guesses, or partially publishes
+rejected input.
 
 Version 1 fixes this complete behavior, including accepted bytes, validation
 order that affects reading and accounting, canonical outputs, and decoder
-identity. An incompatible change requires a new version.
+identity. An incompatible change requires a new version. Widening the accepted
+byte profile is compatible and keeps version 1 when the canonical output of
+every previously accepted payload is unchanged byte for byte. Narrowing the
+profile, or changing any canonical output, requires a new version.

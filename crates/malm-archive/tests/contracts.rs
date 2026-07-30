@@ -13,6 +13,8 @@ use malm_types::Digest;
 
 const EMPTY_USTAR: &str =
     include_str!("../../../schemas/archive/v1/fixtures/golden/empty-ustar.hex");
+const POSIX_VARIANT_USTAR: &str =
+    include_str!("../../../schemas/archive/v1/fixtures/golden/posix-variant-ustar.hex");
 const SINGLE_ZERO_BLOCK: &str =
     include_str!("../../../schemas/archive/v1/fixtures/malformed/single-zero-block.hex");
 const GOLDEN_DIGESTS: &str =
@@ -43,6 +45,74 @@ fn write_octal_digits(field: &mut [u8], mut value: u64) {
         value >>= 3;
     }
     assert_eq!(value, 0, "octal value does not fit fixture field");
+}
+
+/// Writes one POSIX numeric field as `leading` spaces, `digits` octal digits,
+/// then a tail of `terminator` bytes.
+///
+/// It models the space-terminated, short, and leading-space forms POSIX permits
+/// and `write_octal` never emits.
+fn write_posix_octal(
+    field: &mut [u8],
+    mut value: u64,
+    leading: usize,
+    digits: usize,
+    terminator: u8,
+) {
+    assert!(
+        leading + digits < field.len(),
+        "field needs a terminator byte"
+    );
+    field.fill(terminator);
+    field[..leading].fill(b' ');
+    for byte in field[leading..leading + digits].iter_mut().rev() {
+        *byte = b'0' + (value & 7) as u8;
+        value >>= 3;
+    }
+    assert_eq!(value, 0, "octal value does not fit fixture field");
+}
+
+/// One POSIX-legal spelling of the eight-byte checksum field.
+#[derive(Clone, Copy)]
+enum ChecksumShape {
+    /// Six digits, NUL, space: the historical canonical form.
+    DigitsNulSpace,
+    /// Six digits, space, NUL.
+    DigitsSpaceNul,
+    /// Seven digits, NUL.
+    SevenDigitsNul,
+    /// One leading space, six digits, NUL.
+    SpaceDigitsNul,
+}
+
+/// Recomputes the checksum over the block and stores it in `shape`.
+///
+/// Every shape sums the block with the field read as eight spaces, so all of
+/// them describe the same header.
+fn set_checksum_shape(header: &mut [u8; USTAR_BLOCK_BYTES], shape: ChecksumShape) {
+    header[148..156].fill(b' ');
+    let sum = header.iter().map(|byte| u64::from(*byte)).sum();
+    match shape {
+        ChecksumShape::DigitsNulSpace => {
+            write_octal_digits(&mut header[148..154], sum);
+            header[154] = 0;
+            header[155] = b' ';
+        }
+        ChecksumShape::DigitsSpaceNul => {
+            write_octal_digits(&mut header[148..154], sum);
+            header[154] = b' ';
+            header[155] = 0;
+        }
+        ChecksumShape::SevenDigitsNul => {
+            write_octal_digits(&mut header[148..155], sum);
+            header[155] = 0;
+        }
+        ChecksumShape::SpaceDigitsNul => {
+            header[148] = b' ';
+            write_octal_digits(&mut header[149..155], sum);
+            header[155] = 0;
+        }
+    }
 }
 
 fn write_text(field: &mut [u8], value: &[u8]) {
@@ -127,6 +197,88 @@ fn symlink(path: &[u8], target: &[u8], metadata_seed: u64) -> TarEntry {
         header: header(path, 0o777, 0, b'2', target, metadata_seed),
         data: Vec::new(),
     }
+}
+
+/// Builds the same logical entry as `header`, using the space-terminated,
+/// leading-space, and short numeric forms other POSIX writers emit, blank device
+/// fields, and the conventional directory trailing slash.
+fn posix_variant_header(
+    path: &[u8],
+    mode: u64,
+    size: u64,
+    typeflag: u8,
+    link: &[u8],
+    metadata_seed: u64,
+) -> [u8; USTAR_BLOCK_BYTES] {
+    let mut header = [0_u8; USTAR_BLOCK_BYTES];
+    let mut name = path.to_vec();
+    if typeflag == b'5' {
+        name.push(b'/');
+    }
+    write_path(&mut header, &name);
+    write_posix_octal(&mut header[100..108], mode, 2, 4, b' ');
+    write_posix_octal(&mut header[108..116], metadata_seed, 0, 7, b' ');
+    write_posix_octal(&mut header[116..124], metadata_seed + 1, 1, 4, 0);
+    write_posix_octal(&mut header[124..136], size, 0, 11, b' ');
+    write_posix_octal(
+        &mut header[136..148],
+        1_700_000_000 + metadata_seed,
+        0,
+        11,
+        b' ',
+    );
+    header[156] = typeflag;
+    write_text(&mut header[157..257], link);
+    header[257..263].copy_from_slice(b"ustar\0");
+    header[263..265].copy_from_slice(b"00");
+    write_text(
+        &mut header[265..297],
+        format!("user{metadata_seed}").as_bytes(),
+    );
+    write_text(
+        &mut header[297..329],
+        format!("group{metadata_seed}").as_bytes(),
+    );
+    header[329..345].fill(b' ');
+    set_checksum_shape(&mut header, ChecksumShape::DigitsSpaceNul);
+    header
+}
+
+fn posix_regular(path: &[u8], mode: u64, data: &[u8], metadata_seed: u64) -> TarEntry {
+    TarEntry {
+        header: posix_variant_header(path, mode, data.len() as u64, b'0', b"", metadata_seed),
+        data: data.to_vec(),
+    }
+}
+
+fn posix_directory(path: &[u8], mode: u64, metadata_seed: u64) -> TarEntry {
+    TarEntry {
+        header: posix_variant_header(path, mode, 0, b'5', b"", metadata_seed),
+        data: Vec::new(),
+    }
+}
+
+fn posix_symlink(path: &[u8], target: &[u8], metadata_seed: u64) -> TarEntry {
+    TarEntry {
+        header: posix_variant_header(path, 0o777, 0, b'2', target, metadata_seed),
+        data: Vec::new(),
+    }
+}
+
+/// Rebuilds a one-entry archive after `mutate` edits its first header,
+/// recomputing the checksum so the mutation is what fails.
+fn mutated_archive(mutate: impl FnOnce(&mut [u8; USTAR_BLOCK_BYTES])) -> Vec<u8> {
+    let mut bytes = archive([regular(b"file", 0o644, b"", 0)]);
+    let header: &mut [u8; USTAR_BLOCK_BYTES] =
+        (&mut bytes[..USTAR_BLOCK_BYTES]).try_into().unwrap();
+    mutate(header);
+    set_checksum(header);
+    bytes
+}
+
+/// Overwrites the checksum field verbatim, after `set_checksum` has run.
+fn set_raw_checksum(bytes: &mut [u8], field: &[u8; 8]) {
+    bytes[148..156].copy_from_slice(field);
 }
 
 fn typed_entry(typeflag: u8) -> TarEntry {
@@ -438,7 +590,255 @@ fn valid_ustar_prefix_names_are_supported_without_host_path_resolution() {
 }
 
 #[test]
+fn posix_variant_golden_fixture_decodes_to_the_canonical_identity() {
+    let bytes = decode_hex(POSIX_VARIANT_USTAR);
+    assert_eq!(
+        Digest::sha256(&bytes).as_str(),
+        golden_digest("posix-variant-payload")
+    );
+    let decoded = decode(&bytes).expect("POSIX-variant fixture decodes");
+    assert_eq!(
+        decoded.root_digest().as_str(),
+        golden_digest("posix-variant-root-tree")
+    );
+
+    let canonical = decode(&archive([
+        directory(b"theme", 0o755, 0),
+        regular(b"theme/colors.conf", 0o644, b"accent=teal\n", 1),
+    ]))
+    .expect("strictly written equivalent decodes");
+    assert_eq!(
+        decoded.root_digest(),
+        canonical.root_digest(),
+        "the fixture and its strict equivalent are one canonical tree"
+    );
+    assert_eq!(decoded.objects(), canonical.objects());
+}
+
+#[test]
+fn posix_numeric_forms_and_directory_slashes_reach_the_canonical_identity() {
+    let strict = archive([
+        directory(b"bin", 0o755, 3),
+        regular(b"bin/tool", 0o755, b"#!/bin/sh\n", 1),
+        symlink(b"current", b"bin/tool", 2),
+        regular(b"README.txt", 0o644, b"hello\n", 4),
+    ]);
+    let variant = archive([
+        posix_directory(b"bin", 0o755, 30),
+        posix_regular(b"bin/tool", 0o755, b"#!/bin/sh\n", 10),
+        posix_symlink(b"current", b"bin/tool", 20),
+        posix_regular(b"README.txt", 0o644, b"hello\n", 40),
+    ]);
+    assert_ne!(
+        Digest::sha256(&strict),
+        Digest::sha256(&variant),
+        "the two spellings must differ as bytes, or this proves nothing"
+    );
+
+    let strict = decode(&strict).expect("strict archive decodes");
+    let variant = decode(&variant).expect("POSIX-variant archive decodes");
+    assert_eq!(
+        strict.root_digest(),
+        variant.root_digest(),
+        "widening acceptance must not change canonical output"
+    );
+    assert_eq!(strict.objects(), variant.objects());
+}
+
+#[test]
+fn posix_numeric_fields_accept_terminators_and_leading_spaces() {
+    let canonical = decode(&archive([regular(b"file", 0o644, b"abc", 0)]))
+        .expect("canonical archive decodes")
+        .root_digest()
+        .clone();
+    for field in [
+        *b"0000644\0",
+        *b"0000644 ",
+        *b"644\0\0\0\0\0",
+        *b"  644\0\0\0",
+        *b"644 \0\0\0\0",
+    ] {
+        let mut bytes = archive([regular(b"file", 0o644, b"abc", 0)]);
+        let header: &mut [u8; USTAR_BLOCK_BYTES] =
+            (&mut bytes[..USTAR_BLOCK_BYTES]).try_into().unwrap();
+        header[100..108].copy_from_slice(&field);
+        set_checksum(header);
+        assert_eq!(
+            decode(&bytes)
+                .expect("POSIX mode field decodes")
+                .root_digest(),
+            &canonical,
+            "mode field {field:?} changed the canonical identity"
+        );
+    }
+}
+
+#[test]
+fn non_posix_numeric_forms_including_gnu_base_256_are_rejected() {
+    let modes: &[&[u8; 8]] = &[
+        b"\0\0\0\0\0\0\0\0",
+        b"        ",
+        b"000644 1",
+        b"00000644",
+        b"0644\0x\0\0",
+        b"\x80\0\0\0\0\0\x01\xa4",
+        b"0000648\0",
+    ];
+    for field in modes {
+        let bytes = mutated_archive(|header| header[100..108].copy_from_slice(*field));
+        assert!(
+            matches!(
+                decode(&bytes),
+                Err(ArchiveDecodeError::MalformedHeader {
+                    reason: "mode is not an octal field terminated by NUL or space",
+                    ..
+                })
+            ),
+            "accepted non-POSIX mode field {field:?}"
+        );
+    }
+
+    let bytes = mutated_archive(|header| {
+        header[124..136].copy_from_slice(b"\x80\0\0\0\0\0\0\0\0\0\x04\0");
+    });
+    assert!(
+        matches!(
+            decode(&bytes),
+            Err(ArchiveDecodeError::MalformedHeader {
+                reason: "size is not an octal field terminated by NUL or space",
+                ..
+            })
+        ),
+        "GNU base-256 size must stay rejected"
+    );
+
+    let blank = mutated_archive(|header| header[329..345].fill(b' '));
+    assert!(decode(&blank).is_ok(), "a blank device field means absent");
+    let nonzero = mutated_archive(|header| header[329..337].copy_from_slice(b"0000010 "));
+    assert!(matches!(
+        decode(&nonzero),
+        Err(ArchiveDecodeError::MalformedHeader {
+            reason: "device numbers must be zero for an allowed entry",
+            ..
+        })
+    ));
+}
+
+#[test]
+fn checksum_field_accepts_every_posix_terminator_shape() {
+    let canonical = decode(&archive([regular(b"file", 0o644, b"abc", 0)]))
+        .expect("canonical archive decodes")
+        .root_digest()
+        .clone();
+    for shape in [
+        ChecksumShape::DigitsNulSpace,
+        ChecksumShape::DigitsSpaceNul,
+        ChecksumShape::SevenDigitsNul,
+        ChecksumShape::SpaceDigitsNul,
+    ] {
+        let mut bytes = archive([regular(b"file", 0o644, b"abc", 0)]);
+        let header: &mut [u8; USTAR_BLOCK_BYTES] =
+            (&mut bytes[..USTAR_BLOCK_BYTES]).try_into().unwrap();
+        set_checksum_shape(header, shape);
+        assert_eq!(
+            decode(&bytes)
+                .expect("POSIX checksum decodes")
+                .root_digest(),
+            &canonical
+        );
+    }
+
+    for field in [
+        *b"        ",
+        *b"012345\0X",
+        *b"01234567",
+        *b"  \0\0\0\0\0\0",
+    ] {
+        let mut bytes = archive([regular(b"file", 0o644, b"abc", 0)]);
+        set_raw_checksum(&mut bytes, &field);
+        assert!(
+            matches!(
+                decode(&bytes),
+                Err(ArchiveDecodeError::MalformedHeader {
+                    reason: "checksum field is invalid",
+                    ..
+                })
+            ),
+            "accepted checksum field {field:?}"
+        );
+    }
+}
+
+#[test]
+fn directory_trailing_slash_is_normalized_and_no_other_entry_kind_is() {
+    let decoded = decode(&archive([
+        posix_directory(b"dir", 0o755, 0),
+        regular(b"dir/file", 0o644, b"x", 1),
+    ]))
+    .expect("directory with a trailing slash decodes");
+    assert_eq!(
+        decoded
+            .tree_graph()
+            .root()
+            .entries()
+            .iter()
+            .map(|entry| entry.name().as_str())
+            .collect::<Vec<_>>(),
+        ["dir"],
+        "the trailing slash is normalized away, not carried into a name"
+    );
+
+    assert!(
+        matches!(
+            decode(&archive([
+                directory(b"dir", 0o755, 0),
+                posix_directory(b"dir", 0o755, 1),
+            ])),
+            Err(ArchiveDecodeError::DuplicatePath { path }) if path == "dir"
+        ),
+        "`dir/` and `dir` name one path"
+    );
+
+    for entry in [
+        regular(b"trailing/", 0o644, b"x", 0),
+        symlink(b"link/", b"target", 0),
+    ] {
+        assert!(
+            matches!(
+                decode(&archive([entry])),
+                Err(ArchiveDecodeError::InvalidPath {
+                    reason: "empty path components are forbidden",
+                    ..
+                })
+            ),
+            "only a directory entry may carry a trailing slash"
+        );
+    }
+
+    let names: &[(&[u8], &str)] = &[
+        (b"dir//", "empty path components are forbidden"),
+        (b"/", "absolute paths are forbidden"),
+        (b"//", "absolute paths are forbidden"),
+        (b"/abs/", "absolute paths are forbidden"),
+        (b"./", "dot and dot-dot components are forbidden"),
+        (b"../", "dot and dot-dot components are forbidden"),
+    ];
+    for (name, expected) in names {
+        assert!(
+            matches!(
+                decode(&archive([directory(name, 0o755, 0)])),
+                Err(ArchiveDecodeError::InvalidPath { reason, .. }) if reason == *expected
+            ),
+            "accepted directory name {name:?}"
+        );
+    }
+}
+
+#[test]
 fn unsafe_and_noncanonical_paths_are_rejected() {
+    // Every case is a regular file. Only a directory entry may carry the
+    // conventional trailing slash; see
+    // `directory_trailing_slash_is_normalized_and_no_other_entry_kind_is`.
     let paths: &[&[u8]] = &[
         b"/absolute",
         b"./relative",

@@ -114,8 +114,8 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use rustix::fs::{
-    AtFlags, Mode, OFlags, RenameFlags, ResolveFlags, Stat, fstat, fsync, mkdirat, open, openat,
-    openat2, renameat_with, statat, unlinkat,
+    AtFlags, Mode, OFlags, RenameFlags, ResolveFlags, Stat, fchmod, fstat, fsync, mkdirat, open,
+    openat, openat2, renameat_with, statat, unlinkat,
 };
 
 #[derive(Debug)]
@@ -1372,7 +1372,7 @@ impl fmt::Display for EngineError {
             }
             Self::StateParentMissing { path } => write!(
                 formatter,
-                "state parent {} does not exist; create it before initializing Malm",
+                "state parent {} does not exist and cannot be created safely; create it (mode 700) before initializing Malm",
                 path.display()
             ),
             Self::UnsafeDirectory {
@@ -2511,10 +2511,15 @@ impl Engine {
             return Err(EngineError::ReadOnlyStore);
         }
 
-        let Some(parent_chain) = self.open_state_parent()? else {
-            return Err(EngineError::StateParentMissing {
-                path: self.config.state_parent().to_path_buf(),
-            });
+        let parent_chain = match self.open_state_parent()? {
+            Some(chain) => chain,
+            None => {
+                self.create_state_parent_directories()?;
+                self.open_state_parent()?
+                    .ok_or_else(|| EngineError::StateParentObservationChanged {
+                        path: self.config.state_parent().to_path_buf(),
+                    })?
+            }
         };
         let parent = parent_chain.directory();
         validate_state_parent(parent, self.config.state_parent(), self.effective_user_id())?;
@@ -2673,6 +2678,94 @@ impl Engine {
                 source,
             )),
         }
+    }
+
+    /// Creates the missing components of the configured state parent.
+    ///
+    /// Missing components are created mode 0700 only beneath a deepest
+    /// existing ancestor that itself satisfies the state-parent safety
+    /// checks (user-owned, no special mode bits, not group/other-writable);
+    /// an unsafe ancestor keeps initialization refused as
+    /// [`EngineError::StateParentMissing`]. Symlinked ancestors are still
+    /// rejected by `RESOLVE_NO_SYMLINKS` resolution.
+    fn create_state_parent_directories(&self) -> Result<(), EngineError> {
+        let path = self.config.state_parent();
+        let uid = self.effective_user_id();
+        let mut current = File::from(
+            open("/", ROOT_DIRECTORY_FLAGS, Mode::empty())
+                .map_err(|source| errno_error("open filesystem root", path, source))?,
+        );
+        let mut creating = false;
+        for component in path.components() {
+            let Component::Normal(leaf) = component else {
+                continue;
+            };
+            if !creating {
+                match openat2(&current, leaf, ROOT_DIRECTORY_FLAGS, Mode::empty(), RESOLVE_FLAGS) {
+                    Ok(handle) => {
+                        current = File::from(handle);
+                        continue;
+                    }
+                    Err(rustix::io::Errno::NOENT) => {
+                        match validate_state_parent(&current, path, uid) {
+                            Ok(()) => creating = true,
+                            Err(EngineError::UnsafeDirectory { .. }) => {
+                                return Err(EngineError::StateParentMissing {
+                                    path: path.to_path_buf(),
+                                });
+                            }
+                            Err(other) => return Err(other),
+                        }
+                    }
+                    Err(source) => {
+                        return Err(errno_error(
+                            "open state parent without following symlinks",
+                            path,
+                            source,
+                        ));
+                    }
+                }
+            }
+            let created_here = match mkdirat(&current, leaf, Mode::from_raw_mode(0o700)) {
+                Ok(()) => true,
+                Err(rustix::io::Errno::EXIST) => false,
+                Err(source) => {
+                    return Err(errno_error(
+                        "create missing state parent directory",
+                        path,
+                        source,
+                    ));
+                }
+            };
+            let child = File::from(
+                openat2(
+                    &current,
+                    leaf,
+                    DIRECTORY_FLAGS.union(OFlags::NOFOLLOW),
+                    Mode::empty(),
+                    RESOLVE_FLAGS,
+                )
+                .map_err(|source| {
+                    errno_error("pin created state parent directory", path, source)
+                })?,
+            );
+            let stat = directory_stat(&child, path, "inspect created state parent directory")?;
+            validate_owner(&stat, StateDirectory::StateParent, path, uid)?;
+            if created_here {
+                if stat.st_mode & 0o7777 != 0o700 {
+                    fchmod(&child, Mode::from_raw_mode(0o700)).map_err(|source| {
+                        errno_error("restrict created state parent directory", path, source)
+                    })?;
+                }
+            } else {
+                // Lost a creation race: accept the concurrently created
+                // directory only if it already satisfies the safety checks.
+                validate_state_parent(&child, path, uid)?;
+            }
+            ensure_bound(&current, leaf, &child, path)?;
+            current = child;
+        }
+        Ok(())
     }
 
     fn open_ready_store(&self) -> Result<ReadyStoreRoot<'_>, EngineError> {

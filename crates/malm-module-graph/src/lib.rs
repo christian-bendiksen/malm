@@ -44,19 +44,13 @@ pub enum PackVerificationError {
     #[error("invalid pack tree: {0}")]
     InvalidTree(#[source] PackTreeError),
     #[error("pack content digest mismatch: expected {expected}, computed {actual}")]
-    DigestMismatch {
-        expected: Digest,
-        actual: Digest,
-    },
+    DigestMismatch { expected: Digest, actual: Digest },
     #[error("pack object is missing malm-pack.kdl")]
     MissingManifest,
     #[error("invalid pack manifest: {0}")]
     InvalidManifest(#[source] PackReadError),
     #[error("declared {kind} path {path:?} is absent from the pack")]
-    MissingDeclaredPath {
-        kind: &'static str,
-        path: PackPath,
-    },
+    MissingDeclaredPath { kind: &'static str, path: PackPath },
     #[error("component {path:?} digest mismatch: expected {expected}, computed {actual}")]
     ComponentDigestMismatch {
         path: PackPath,
@@ -281,10 +275,7 @@ pub enum ModuleResolutionError {
         module: ContributionName,
     },
     #[error("pack {from} has no direct dependency alias {alias}")]
-    UnknownDependencyAlias {
-        from: PackNodeId,
-        alias: Alias,
-    },
+    UnknownDependencyAlias { from: PackNodeId, alias: Alias },
     #[error("pack {from} alias {alias} targets {target}, which has no module {module}")]
     UnknownDependencyModule {
         from: PackNodeId,
@@ -305,10 +296,7 @@ pub enum ComponentResolutionError {
         name: ContributionName,
     },
     #[error("verified pack {node_id} lacks component bytes at {path}")]
-    MissingVerifiedBytes {
-        node_id: PackNodeId,
-        path: PackPath,
-    },
+    MissingVerifiedBytes { node_id: PackNodeId, path: PackPath },
 }
 
 /// Borrowed component bytes with verified graph provenance.
@@ -463,10 +451,7 @@ impl AssembledLockedGraphV1 {
 #[derive(Debug, Error)]
 pub enum GraphAssemblyError<E> {
     #[error("load cached pack {digest}: {source}")]
-    ObjectLoad {
-        digest: Digest,
-        source: E,
-    },
+    ObjectLoad { digest: Digest, source: E },
     #[error("verify cached pack {digest}: {source}")]
     ObjectVerification {
         digest: Digest,

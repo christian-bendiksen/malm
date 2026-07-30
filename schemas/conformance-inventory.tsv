@@ -9,6 +9,7 @@ schemas/archive/v1/provenance.schema.json	schema	-	tests/schema_inventory.rs	-	-
 schemas/archive/v1/fixtures/golden/declaration.json	valid	schemas/archive/v1/declaration.schema.json	tests/schema_inventory.rs	-	-
 schemas/archive/v1/fixtures/golden/digests.txt	decoder	-	crates/malm-archive/tests/contracts.rs	golden/digests.txt	no-applicable-JSON-Schema
 schemas/archive/v1/fixtures/golden/empty-ustar.hex	decoder	-	crates/malm-archive/tests/contracts.rs	golden/empty-ustar.hex	binary-archive-contract
+schemas/archive/v1/fixtures/golden/posix-variant-ustar.hex	decoder	-	crates/malm-archive/tests/contracts.rs	golden/posix-variant-ustar.hex	binary-archive-contract
 schemas/archive/v1/fixtures/golden/provenance.json	valid	schemas/archive/v1/provenance.schema.json	tests/schema_inventory.rs	-	-
 schemas/archive/v1/fixtures/valid/declaration.json	valid	schemas/archive/v1/declaration.schema.json	tests/schema_inventory.rs	-	-
 schemas/archive/v1/fixtures/valid/provenance.json	valid	schemas/archive/v1/provenance.schema.json	tests/schema_inventory.rs	-	-

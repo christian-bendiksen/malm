@@ -29,16 +29,12 @@ not have a pack, read [Create a Malm Pack](docs/authoring-types.md) for the
 configuration and the [pack manifest guide](schemas/pack/v1/grammar.md) for
 `malm-pack.kdl`.
 
-Before initializing the store, its state parent must already exist and be owned
-by the current user. It must not be writable by the group or other users, and it
-must not have special permission bits. The parent is `$XDG_STATE_HOME`, or
-`$HOME/.local/state` when `XDG_STATE_HOME` is unset. For a missing parent, create
-a private directory first:
-
-```sh
-state_parent=${XDG_STATE_HOME:-"$HOME/.local/state"}
-install -d -m 700 "$state_parent"
-```
+The store lives beneath a state parent: `$XDG_STATE_HOME`, or
+`$HOME/.local/state` when `XDG_STATE_HOME` is unset. `malm store init` creates a
+missing parent itself (mode 700) beneath the deepest existing ancestor, provided
+that ancestor is owned by the current user, has no special permission bits, and
+is not writable by the group or other users. A parent that already exists must
+satisfy the same rules; an unsafe parent or ancestor is refused, never repaired.
 
 Replace `/absolute/path/to/pack` with the pack's full path. The commands below
 run from any directory:

@@ -39,6 +39,31 @@ fn json_success_and_error_are_single_envelopes() {
 }
 
 #[test]
+fn absent_store_errors_carry_the_typed_store_not_ready_code_and_help() {
+    let env = TestEnv::new();
+
+    let json = env.malm_without_repo(&["plan", "list", "--format", "json"]);
+    assert_eq!(json.status.code(), Some(2));
+    assert!(json.stdout.is_empty());
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
+    assert_cli_envelope(&envelope);
+    assert_eq!(envelope["error"]["code"], "store-not-ready");
+    assert_eq!(envelope["error"]["category"], "conflict");
+    assert!(
+        envelope["error"]["help"]
+            .as_str()
+            .unwrap()
+            .contains("malm store init")
+    );
+
+    let human = env.malm_without_repo(&["plan", "list"]);
+    assert_eq!(human.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&human.stderr);
+    assert!(stderr.contains("error[store-not-ready]"), "{stderr}");
+    assert!(stderr.contains("malm store init"), "{stderr}");
+}
+
+#[test]
 fn json_argument_errors_use_the_error_envelope() {
     let env = TestEnv::new();
     let failure = env.malm_without_repo(&["store", "status", "--format", "json", "--unsupported"]);

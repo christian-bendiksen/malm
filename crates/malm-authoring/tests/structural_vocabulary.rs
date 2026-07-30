@@ -406,3 +406,53 @@ profile "p" {{ use "m" }}
         assert!(report(&document).contains("immediately follow"));
     }
 }
+
+/// The accepted asset formats must be exactly the ones deployment implements,
+/// or a pack passes `source check` and then fails at deploy.
+#[test]
+fn asset_formats_are_limited_to_the_ones_deployment_implements() {
+    fn document(format: &str) -> String {
+        format!(
+            r#"config target="~/.config" default-profile="p"
+assets {{
+    asset "theme-pack" {{
+        url "https://example.com/theme"
+        dst "~/.local/share/themes"
+        format "{format}"
+        sha256 "{digest}"
+        path "vendor/theme"
+    }}
+}}
+module "m" {{
+    description "d"
+    outputs {{
+        render "m/out.conf" format="text" {{
+            @line "x"
+        }}
+    }}
+}}
+profile "p" {{
+    use "m"
+}}
+"#,
+            digest = "0".repeat(64)
+        )
+    }
+
+    for format in ["zip", "7z", "tar.gz", ""] {
+        assert_eq!(
+            report(&document(format)),
+            format!("asset `theme-pack`: unknown format `{format}` (allowed: tar, tar-xz, tar-gz)")
+        );
+    }
+
+    for format in ["tar", "tar-xz", "tar-gz"] {
+        let evaluated = evaluate(&document(format), &[]);
+        assert_eq!(
+            evaluated.assets().len(),
+            1,
+            "format `{format}` must reach evaluation"
+        );
+        assert_eq!(evaluated.assets()[0].format, format);
+    }
+}

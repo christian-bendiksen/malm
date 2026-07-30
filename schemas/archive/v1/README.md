@@ -5,10 +5,11 @@ it into immutable [`tree/v1`](../../tree/v1/README.md) objects. Use this contrac
 when producing archive declarations, reviewing archive provenance, or
 implementing the trusted decoder for untrusted input.
 
-The only accepted payload is an uncompressed, strict POSIX ustar stream. The
-decoder verifies its declared byte length and SHA-256 digest, accepts regular
-files, directories, and safe relative symlinks, and builds a closed tree graph
-without extracting host paths. The stream must end with exactly two all-zero
+The only accepted payload is an uncompressed POSIX ustar stream. The decoder
+accepts the complete POSIX numeric-field profile and the conventional directory
+trailing slash, and no GNU extension. It verifies the declared byte length and
+SHA-256 digest, accepts regular files, directories, and safe relative symlinks,
+and builds a closed tree graph without extracting host paths. The stream must end with exactly two all-zero
 512-byte records. Blocking-factor padding and every other trailing byte are
 rejected.
 

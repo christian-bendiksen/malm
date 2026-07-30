@@ -2485,19 +2485,43 @@ fn previous_target_state<'a>(
 }
 
 fn require_empty_target_directory(directory: &File, path: &Path) -> Result<(), EngineError> {
+    const NAMED_ENTRIES: usize = 3;
     let mut entries = Dir::read_from(directory)
         .map_err(|source| errno_error("enumerate managed target directory", path, source))?;
+    let mut named = Vec::new();
+    let mut more = 0_usize;
     while let Some(entry) = entries.read() {
         let entry = entry
             .map_err(|source| errno_error("enumerate managed target directory", path, source))?;
-        if !matches!(entry.file_name().to_bytes(), b"." | b"..") {
-            return Err(unsafe_target(
-                path,
-                "remove-leaf can remove only an empty directory",
+        if matches!(entry.file_name().to_bytes(), b"." | b"..") {
+            continue;
+        }
+        if named.len() < NAMED_ENTRIES {
+            named.push(format!(
+                "\"{}\"",
+                entry.file_name().to_string_lossy().escape_default()
             ));
+        } else {
+            more += 1;
         }
     }
-    Ok(())
+    if named.is_empty() {
+        return Ok(());
+    }
+    named.sort_unstable();
+    let mut listed = named.join(", ");
+    if more > 0 {
+        listed.push_str(&format!(" and {more} more"));
+    }
+    Err(unsafe_target(
+        path,
+        &format!(
+            "directory is not empty and is not managed by malm (contains {listed}); \
+             move it away first (for example: mv -- {path} {path}.backup) or delete it, \
+             then re-run",
+            path = path.display()
+        ),
+    ))
 }
 
 fn reject_state_traversal_directory(

@@ -105,6 +105,7 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
             git_executable,
         } => {
             contract.assert_engine_operation(EngineOperation::PrepareStaticDeploymentV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
             let source = resolve_source_root(Some(source))?;
             let (engine, request) = static_prepare_request(
                 access,
@@ -123,6 +124,7 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
                 selected_profile,
                 output,
             )?;
+            require_ready_store(engine.store_status()?)?;
             let plan = engine.prepare_static_deployment_v1(&request)?;
             print_plan(&plan, output)
         }
@@ -141,6 +143,7 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
         } => {
             contract.assert_engine_operation(EngineOperation::PrepareStaticDeploymentV1);
             contract.assert_engine_operation(EngineOperation::CommitV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
             let source = resolve_source_root(source.as_deref())?;
             ensure_lock_exists(&source, lock.as_deref())?;
             let (engine, request) = static_prepare_request(
@@ -160,6 +163,7 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
                 selected_profile,
                 output,
             )?;
+            require_ready_store(engine.store_status()?)?;
             let plan = engine.prepare_static_deployment_v1(&request)?;
             let consent = crate::cli::interactive::review(&plan, &[], output, *yes, false)?;
             if consent == crate::cli::interactive::Consent::Commit {
@@ -289,6 +293,7 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
             root_scratch,
         } => {
             contract.assert_engine_operation(EngineOperation::PrepareTrackedRootV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
             let source_url = GitUrl::new(source_url.clone())?;
             let selector = MovingSelectorV1::new(selector.clone())?;
             let source_subdir = PackSubdir::new(source_subdir.clone())?;
@@ -322,6 +327,7 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
                     infrastructure,
                 })?;
             let engine = engine_with_output(access, targets, true, true, output)?;
+            require_ready_store(engine.store_status()?)?;
             let plan = engine.prepare_tracked_root_v1(&request)?;
             print_plan(&plan, output)
         }
@@ -333,11 +339,13 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
             root_scratch,
         } => {
             contract.assert_engine_operation(EngineOperation::UpdateTrackedRootV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
             let request = TrackedRootUpdateRequestV1::new(
                 NamespaceName::new(namespace.clone())?,
                 tracked_infrastructure(git_executable, root_scratch, git_scratch)?,
             );
             let engine = engine_with_output(access, targets, true, true, output)?;
+            require_ready_store(engine.store_status()?)?;
             match engine.update_v1(&request)? {
                 TrackedRootUpdateOutcomeV1::Prepared(plan) => print_plan(&plan, output),
                 TrackedRootUpdateOutcomeV1::NoChange(no_change) => {
@@ -546,7 +554,9 @@ pub fn run(command: &Cmd, output: &Output, selected_profile: Option<&str>) -> Re
             contract.assert_engine_operation(EngineOperation::CommitV1);
             contract.assert_engine_operation(EngineOperation::InspectPlanV1);
             contract.assert_engine_operation(EngineOperation::InspectPlanIndexV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
             let engine = engine_with_output(access, targets, true, false, output)?;
+            require_ready_store(engine.store_status()?)?;
             let plans = engine.list_plans_v1()?;
             let plan_id = resolve_plan_reference(&plans, plan_id.as_deref())?;
             let Some(approval) = approval else {
@@ -1060,10 +1070,14 @@ pub(super) fn run_lock(command: &LockCmd, output: &Output) -> Result<()> {
     let outcome = match command {
         LockCmd::Create(_) => {
             contract.assert_engine_operation(EngineOperation::CreateLockV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
+            require_ready_store(engine.store_status()?)?;
             engine.create_lock_v1(&source, &inputs, &git)?
         }
         LockCmd::Update(_) => {
             contract.assert_engine_operation(EngineOperation::UpdateLockV1);
+            contract.assert_engine_operation(EngineOperation::StoreStatus);
+            require_ready_store(engine.store_status()?)?;
             engine.update_lock_v1(&source, &inputs, &git)?
         }
     };
@@ -1642,6 +1656,18 @@ fn ensure_lock_exists(source: &Path, lock: Option<&Path>) -> Result<()> {
         "no lock at {}; create it once with:\n    malm source lock create --source {}",
         lock_path.display(),
         source.display()
+    );
+    Ok(())
+}
+
+/// Rejects non-ready stores before acquisition or plan work begins.
+///
+/// The message mirrors the engine's own `StoreNotReady` text so the CLI
+/// assigns the `store-not-ready` code and its bootstrap help.
+fn require_ready_store(status: crate::StoreStatus) -> Result<()> {
+    ensure!(
+        status == crate::StoreStatus::Ready,
+        "store is not ready: {status:?}"
     );
     Ok(())
 }

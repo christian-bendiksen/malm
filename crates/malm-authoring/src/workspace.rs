@@ -581,9 +581,11 @@ fn parse_asset_entry(node: &KdlNode) -> Result<AssetEntry, String> {
     }
     let dst = req_child_str(node, "dst", &name)?;
     let format = req_child_str(node, "format", &name)?;
-    if !matches!(format.as_str(), "tar" | "zip" | "tar-xz" | "tar-gz") {
+    // This list must stay exactly what `lower_asset` can deploy, or a pack that
+    // passes `source check` fails at deploy instead.
+    if !matches!(format.as_str(), "tar" | "tar-xz" | "tar-gz") {
         return Err(format!(
-            "asset `{name}`: unknown format `{format}` (allowed: tar, zip, tar-xz, tar-gz)"
+            "asset `{name}`: unknown format `{format}` (allowed: tar, tar-xz, tar-gz)"
         ));
     }
     let sha256 = opt_child_str(node, "sha256", &name)?;

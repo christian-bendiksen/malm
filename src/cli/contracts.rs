@@ -75,21 +75,28 @@ pub(super) const fn cli_contract(command: &Cmd) -> OperationContract {
         Cmd::ComponentHostProfile => OperationContract::new(&[], ReadOnlyInspection),
         Cmd::Store { cmd } => store_contract(cmd),
         Cmd::Lock { cmd } => lock_contract(cmd),
-        Cmd::Prepare { .. } => {
-            OperationContract::new(&[Engine::PrepareStaticDeploymentV1], PrepareWithAcquisition)
-        }
+        Cmd::Prepare { .. } => OperationContract::new(
+            &[Engine::PrepareStaticDeploymentV1, Engine::StoreStatus],
+            PrepareWithAcquisition,
+        ),
         Cmd::Apply { .. } => OperationContract::new(
-            &[Engine::PrepareStaticDeploymentV1, Engine::CommitV1],
+            &[
+                Engine::PrepareStaticDeploymentV1,
+                Engine::CommitV1,
+                Engine::StoreStatus,
+            ],
             MutationWrite,
         ),
         Cmd::Check { .. } | Cmd::Vars { .. } => OperationContract::new(&[], ReadOnlyInspection),
         Cmd::Render { .. } => OperationContract::new(&[], HostWriteExport),
-        Cmd::Track { .. } => {
-            OperationContract::new(&[Engine::PrepareTrackedRootV1], PrepareWithAcquisition)
-        }
-        Cmd::Update { .. } => {
-            OperationContract::new(&[Engine::UpdateTrackedRootV1], PrepareWithAcquisition)
-        }
+        Cmd::Track { .. } => OperationContract::new(
+            &[Engine::PrepareTrackedRootV1, Engine::StoreStatus],
+            PrepareWithAcquisition,
+        ),
+        Cmd::Update { .. } => OperationContract::new(
+            &[Engine::UpdateTrackedRootV1, Engine::StoreStatus],
+            PrepareWithAcquisition,
+        ),
         Cmd::Switch { .. } => {
             OperationContract::new(&[Engine::PrepareProfileSwitchV1], PrepareOnly)
         }
@@ -114,6 +121,7 @@ pub(super) const fn cli_contract(command: &Cmd) -> OperationContract {
                 Engine::CommitV1,
                 Engine::InspectPlanV1,
                 Engine::InspectPlanIndexV1,
+                Engine::StoreStatus,
             ],
             MutationWrite,
         ),
@@ -225,8 +233,14 @@ pub(super) const fn lock_contract(command: &LockCmd) -> OperationContract {
     use EngineOperation as Engine;
 
     match command {
-        LockCmd::Create(_) => OperationContract::new(&[Engine::CreateLockV1], LockWithAcquisition),
-        LockCmd::Update(_) => OperationContract::new(&[Engine::UpdateLockV1], LockWithAcquisition),
+        LockCmd::Create(_) => OperationContract::new(
+            &[Engine::CreateLockV1, Engine::StoreStatus],
+            LockWithAcquisition,
+        ),
+        LockCmd::Update(_) => OperationContract::new(
+            &[Engine::UpdateLockV1, Engine::StoreStatus],
+            LockWithAcquisition,
+        ),
     }
 }
 

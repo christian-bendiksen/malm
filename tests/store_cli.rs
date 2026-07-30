@@ -87,7 +87,7 @@ fn inaccessible_experimental_sibling_is_never_inspected() {
 }
 
 #[test]
-fn missing_state_parent_and_malformed_store_propagate_as_cli_errors() {
+fn store_init_creates_a_missing_state_parent_with_private_mode() {
     let env = TestEnv::new();
     let state_home = env.state_root().parent().unwrap().to_path_buf();
     std::fs::remove_dir(&state_home).unwrap();
@@ -100,14 +100,63 @@ fn missing_state_parent_and_malformed_store_propagate_as_cli_errors() {
             true,
         ),
     );
-    let missing = env.malm_without_repo(&["store", "init"]);
-    assert_eq!(missing.status.code(), Some(2));
-    assert!(missing.stdout.is_empty());
-    assert!(String::from_utf8_lossy(&missing.stderr).contains("state parent"));
+    assert!(!state_home.exists(), "store status must not create anything");
+
+    assert_success_output(
+        env.malm_without_repo(&["store", "init"]),
+        &store_output(&env.state_root(), "Store is ready", "ready", false),
+    );
+    let mode = std::fs::metadata(&state_home).unwrap().mode() & 0o7777;
+    assert_eq!(mode, 0o700);
+    assert!(env.state_root().join("descriptor.json").is_file());
+}
+
+#[test]
+fn store_init_creates_nested_missing_state_parents() {
+    let env = TestEnv::new();
+    let state_home = env.state_root().parent().unwrap().to_path_buf();
+    std::fs::remove_dir(&state_home).unwrap();
+    let nested = state_home.join("nested/state");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_malm"))
+        .args(["store", "init"])
+        .env("HOME", env.home())
+        .env("XDG_STATE_HOME", &nested)
+        .env_remove("MALM_FAILPOINT")
+        .output()
+        .unwrap();
+    assert_success_output(
+        output,
+        &store_output(&nested.join("malm"), "Store is ready", "ready", false),
+    );
+    for directory in [&state_home, &state_home.join("nested"), &nested] {
+        let mode = std::fs::metadata(directory).unwrap().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "{}", directory.display());
+    }
+    assert!(nested.join("malm/descriptor.json").is_file());
+}
+
+#[test]
+fn store_init_refuses_to_create_beneath_an_unsafe_ancestor() {
+    let env = TestEnv::new();
+    let state_home = env.state_root().parent().unwrap().to_path_buf();
+    std::fs::remove_dir(&state_home).unwrap();
+    let ancestor = state_home.parent().unwrap().to_path_buf();
+    std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o770)).unwrap();
+
+    let refused = env.malm_without_repo(&["store", "init"]);
+    assert_eq!(refused.status.code(), Some(2));
+    assert!(refused.stdout.is_empty());
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(stderr.contains("state parent"), "{stderr}");
     assert!(!state_home.exists());
 
-    std::fs::create_dir(&state_home).unwrap();
-    std::fs::set_permissions(&state_home, std::fs::Permissions::from_mode(0o700)).unwrap();
+    std::fs::set_permissions(&ancestor, std::fs::Permissions::from_mode(0o700)).unwrap();
+}
+
+#[test]
+fn malformed_store_propagates_as_a_cli_error() {
+    let env = TestEnv::new();
     std::fs::create_dir(env.state_root()).unwrap();
     std::fs::set_permissions(env.state_root(), std::fs::Permissions::from_mode(0o700)).unwrap();
     let marker = env.state_root().join("descriptor.json");
@@ -166,6 +215,31 @@ fn unset_xdg_uses_home_fallback_with_json_envelope() {
     assert_eq!(ignored_global.status.code(), Some(2));
     assert!(ignored_global.stdout.is_empty());
     assert!(String::from_utf8_lossy(&ignored_global.stderr).contains("--profile"));
+}
+
+#[test]
+fn unset_xdg_creates_the_home_fallback_state_parent() {
+    let env = TestEnv::new();
+    let fallback = env.home().join(".local/state");
+    assert!(!env.home().join(".local").exists());
+
+    let output = Command::new(env!("CARGO_BIN_EXE_malm"))
+        .args(["store", "init"])
+        .env("HOME", env.home())
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("MALM_FAILPOINT")
+        .output()
+        .unwrap();
+    assert_success_output(
+        output,
+        &store_output(&fallback.join("malm"), "Store is ready", "ready", false),
+    );
+    for directory in [&env.home().join(".local"), &fallback] {
+        let mode = std::fs::metadata(directory).unwrap().mode() & 0o7777;
+        assert_eq!(mode, 0o700, "{}", directory.display());
+    }
+    assert!(fallback.join("malm/descriptor.json").is_file());
+    assert!(!env.state_root().exists());
 }
 
 #[test]

@@ -32,19 +32,13 @@ pub enum PackObjectReadError {
     #[error("invalid pack object: {0}")]
     InvalidEncoding(&'static str),
     #[error("unsupported pack-object encoding: expected {expected}, found {found}")]
-    UnsupportedVersion {
-        expected: u16,
-        found: u16,
-    },
+    UnsupportedVersion { expected: u16, found: u16 },
     #[error("{0}")]
     InvalidPath(#[source] ValueError),
     #[error("invalid pack tree: {0}")]
     InvalidTree(#[source] PackTreeError),
     #[error("pack-object digest mismatch: expected {expected}, computed {actual}")]
-    DigestMismatch {
-        expected: Digest,
-        actual: Digest,
-    },
+    DigestMismatch { expected: Digest, actual: Digest },
     #[error("read canonical pack object: {0}")]
     Io(#[source] io::Error),
 }

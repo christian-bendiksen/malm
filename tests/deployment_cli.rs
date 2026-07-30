@@ -2166,6 +2166,66 @@ profile "calm" {
 }
 
 #[test]
+fn absent_store_is_rejected_up_front_with_the_bootstrap_hint() {
+    let env = TestEnv::new();
+    write_authoring_pack(&env);
+    let source = env.repo().to_str().unwrap().to_owned();
+
+    for arguments in [
+        vec!["source", "lock", "create", "--source", &source],
+        vec!["source", "lock", "update", "--source", &source],
+        vec!["plan", "create", "--source", &source],
+        vec!["deploy", "--source", &source],
+        vec!["plan", "apply", "plan:0123456789ab"],
+    ] {
+        let output = env.malm(&arguments);
+        assert_eq!(output.status.code(), Some(2), "{arguments:?}");
+        assert!(output.stdout.is_empty(), "{arguments:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("error[store-not-ready]"),
+            "{arguments:?}: {stderr}"
+        );
+        assert!(stderr.contains("malm store init"), "{arguments:?}: {stderr}");
+    }
+    assert!(!env.state_root().exists());
+}
+
+#[test]
+fn unmanaged_nonempty_directory_at_a_target_names_entries_and_remediation() {
+    let env = TestEnv::new();
+    write_authoring_pack(&env);
+    assert!(env.malm(&["store", "init"]).status.success());
+    let blocking = env.home().join(".config/greeter/greeting.conf");
+    fs::create_dir_all(&blocking).unwrap();
+    fs::write(blocking.join("stale.txt"), b"stale").unwrap();
+    fs::write(blocking.join("old.txt"), b"old").unwrap();
+
+    let source = env.repo().to_str().unwrap().to_owned();
+    let refused = env.malm(&["plan", "create", "--source", &source]);
+    assert_eq!(refused.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("directory is not empty and is not managed by malm"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("\"old.txt\", \"stale.txt\""), "{stderr}");
+    assert!(stderr.contains("mv -- "), "{stderr}");
+    assert!(stderr.contains("greeting.conf.backup"), "{stderr}");
+    assert_eq!(fs::read(blocking.join("stale.txt")).unwrap(), b"stale");
+
+    let moved = env.home().join(".config/greeter/greeting.conf.backup");
+    fs::rename(&blocking, &moved).unwrap();
+    let prepared = env.malm(&["plan", "create", "--source", &source]);
+    assert!(
+        prepared.status.success(),
+        "{}",
+        String::from_utf8_lossy(&prepared.stderr)
+    );
+    assert!(moved.join("stale.txt").is_file());
+}
+
+#[test]
 fn apply_without_consent_publishes_the_plan_and_fails_closed() {
     let env = TestEnv::new();
     write_authoring_pack(&env);
