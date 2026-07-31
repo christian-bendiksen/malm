@@ -205,3 +205,120 @@ fn smia_shaped_plan_succeeds_at_1024_and_fails_at_a_genuinely_low_limit() {
         );
     }
 }
+
+/// Places files under directories the plan itself creates. Every placement
+/// waits on two missing ancestors, so each one advances through
+/// `complete_pending_pins` twice.
+fn missing_ancestor_request(files: usize) -> PrepareRequestV1 {
+    let mut artifacts = Vec::with_capacity(files);
+    let mut operations = Vec::with_capacity(files + 2);
+    for prefix in ["outputs", "outputs/live"] {
+        operations.push(
+            PrepareOperationV1::ensure_directory(
+                DeploymentName::new("home").unwrap(),
+                prefix,
+                0o700,
+            )
+            .unwrap(),
+        );
+    }
+    for index in 0..files {
+        let artifact = ArtifactId::new(format!("outputs/{index}")).unwrap();
+        artifacts.push(
+            PrepareArtifactV1::new(
+                artifact.clone(),
+                format!("generated output {index}\n").into_bytes(),
+                "text/plain",
+            )
+            .unwrap(),
+        );
+        operations.push(
+            PrepareOperationV1::place_file(
+                DeploymentName::new("home").unwrap(),
+                format!("outputs/live/file-{index}"),
+                artifact,
+                0o600,
+            )
+            .unwrap(),
+        );
+    }
+    PrepareRequestV1::from(PrepareRequestPartsV1 {
+        namespace: NamespaceName::new("missing-ancestors").unwrap(),
+        expected_head: None,
+        graph_digest: Digest::sha256(b"missing-ancestor descriptor budget"),
+        inputs: Vec::new(),
+        artifacts,
+        transforms: Vec::new(),
+        findings: Vec::new(),
+        operations,
+    })
+}
+
+/// A dependent target proves its own parent still binds the created directory
+/// and then shares the descriptor opened for that directory. Retaining one
+/// descriptor per dependent instead exhausted the process limit on a first run
+/// against a system where none of the destination directories existed yet.
+#[test]
+fn plan_creating_its_own_ancestors_pins_one_descriptor_per_directory() {
+    const FILES: usize = 600;
+
+    if std::env::var_os(RLIMIT_CHILD).is_none() {
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "plan_creating_its_own_ancestors_pins_one_descriptor_per_directory",
+                "--nocapture",
+                "--test-threads=1",
+            ])
+            .env(RLIMIT_CHILD, "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "missing-ancestor child failed\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        return;
+    }
+
+    let inherited = getrlimit(Resource::Nofile);
+    assert!(
+        inherited.maximum.is_none_or(|maximum| maximum >= 1_024),
+        "test requires a hard NOFILE limit of at least 1024"
+    );
+    setrlimit(
+        Resource::Nofile,
+        Rlimit {
+            current: Some(1_024),
+            maximum: inherited.maximum,
+        },
+    )
+    .unwrap();
+
+    let temp = tempfile::tempdir().unwrap();
+    let state_home = temp.path().join("state");
+    fs::create_dir(&state_home).unwrap();
+    fs::set_permissions(&state_home, fs::Permissions::from_mode(0o700)).unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir(&target).unwrap();
+
+    let engine = engine(&state_home, &target, 1_024);
+    engine.initialize_store().unwrap();
+    let prepared = engine.prepare_v1(&missing_ancestor_request(FILES)).unwrap();
+    let request = CommitRequestV1::new(
+        prepared.plan_id().clone(),
+        ApprovalV1::new(
+            prepared.plan_id().clone(),
+            prepared.approval_digest().clone(),
+        ),
+    );
+
+    engine.commit_v1(&request).unwrap();
+    for index in 0..FILES {
+        assert_eq!(
+            fs::read(target.join(format!("outputs/live/file-{index}"))).unwrap(),
+            format!("generated output {index}\n").as_bytes()
+        );
+    }
+}

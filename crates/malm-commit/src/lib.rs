@@ -1991,12 +1991,19 @@ fn validate_descriptor_budget(
     config: &CommitConfig,
     prepared: &PreparedRecordV1,
 ) -> Result<(), CommitError> {
-    let required = target_descriptor_requirement(config, prepared)?;
-    if required > MAX_TARGET_PINNED_DESCRIPTORS {
+    let DescriptorRequirement { directories, leaves } =
+        target_descriptor_requirement(config, prepared)?;
+    if directories > MAX_TARGET_PINNED_DESCRIPTORS {
         return Err(CommitError::InvalidPlan(format!(
-            "plan requires {required} pinned filesystem descriptors, exceeding the safety limit of {MAX_TARGET_PINNED_DESCRIPTORS}"
+            "plan requires {directories} pinned filesystem descriptors, exceeding the safety limit of {MAX_TARGET_PINNED_DESCRIPTORS}"
         )));
     }
+    // The phased schedule holds every staged inode and every pinned prior leaf
+    // open at the same time as the directory pins, so the process limit has to
+    // cover the sum rather than the directory pins alone.
+    let required = directories
+        .checked_add(leaves)
+        .ok_or_else(descriptor_budget_overflow)?;
     let soft_limit = config.open_file_soft_limit.unwrap_or(u64::MAX);
     let reserve = (soft_limit / 4).max(TARGET_DESCRIPTOR_RESERVE);
     if required > soft_limit.saturating_sub(reserve) {
@@ -2013,11 +2020,21 @@ struct DescriptorAuthority {
     prefixes: BTreeMap<String, FileIdentityV1>,
 }
 
+/// Descriptors a commit holds open at its peak. `directories` counts the
+/// traversal and ancestor pins shared across targets; `leaves` counts the
+/// per-operation descriptors the phased schedule holds alongside them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DescriptorRequirement {
+    directories: u64,
+    leaves: u64,
+}
+
 fn target_descriptor_requirement(
     config: &CommitConfig,
     prepared: &PreparedRecordV1,
-) -> Result<u64, CommitError> {
+) -> Result<DescriptorRequirement, CommitError> {
     let mut pinned = 0_u64;
+    let mut leaves = 0_u64;
     let mut destinations = BTreeSet::new();
     let mut pending_prefixes = BTreeSet::new();
     let mut authorities = BTreeMap::<DeploymentName, DescriptorAuthority>::new();
@@ -2035,6 +2052,21 @@ fn target_descriptor_requirement(
                 "target operation destinations are duplicated".to_owned(),
             ));
         }
+
+        // Phase A stages one anonymous inode per file placement and holds it
+        // until the burst renames it into place. Phase B pins the prior leaf
+        // of every replacement and removal for the same span.
+        let staged = u64::from(matches!(operation, PreparedOperationV1::PlaceFile { .. }));
+        let prior = u64::from(
+            matches!(
+                operation,
+                PreparedOperationV1::PlaceFile { .. } | PreparedOperationV1::RemoveLeaf { .. }
+            ) && matches!(observation.leaf(), LeafObservationV1::Present(_)),
+        );
+        leaves = leaves
+            .checked_add(staged)
+            .and_then(|count| count.checked_add(prior))
+            .ok_or_else(descriptor_budget_overflow)?;
 
         let segments = observation.relative_path().split('/').collect::<Vec<_>>();
         let parent_segments = &segments[..segments.len() - 1];
@@ -2111,7 +2143,10 @@ fn target_descriptor_requirement(
             }
         }
     }
-    Ok(pinned)
+    Ok(DescriptorRequirement {
+        directories: pinned,
+        leaves,
+    })
 }
 
 fn observe_descriptor_prefix(
@@ -3791,6 +3826,7 @@ fn complete_pending_pins(
         ROOT_RESOLVE_FLAGS,
     )
     .map(File::from)
+    .map(Arc::new)
     .map_err(|source| io_error("open created target directory", &absolute, source))?;
     let created_stat = fstat(&created)
         .map_err(|source| io_error("inspect created target directory", &absolute, source))?;
@@ -3820,10 +3856,17 @@ fn complete_pending_pins(
                 "created target ancestor changed before its dependents pinned it".to_owned(),
             ));
         }
-        let handle = Arc::new(handle);
+        // The per-target open proved that this target's own pinned parent
+        // still binds the segment to the directory this operation created.
+        // That proof is what the open was for; the descriptor itself is
+        // redundant because it names the same inode as `created`. Dropping it
+        // and sharing `created` keeps one descriptor per created directory
+        // instead of one per dependent target, which is what the plan's
+        // descriptor budget reserves.
+        drop(handle);
         let identity = file_identity(&stat);
-        target.ancestors.push((segment, Arc::clone(&handle)));
-        target.parent = handle;
+        target.ancestors.push((segment, Arc::clone(&created)));
+        target.parent = Arc::clone(&created);
         target.parent_object = identity;
         target.expected_parent = identity;
         target.pending.remove(0);
@@ -7296,13 +7339,19 @@ mod tests {
         ]);
         let config = descriptor_config();
 
-        let single = target_descriptor_requirement(&config, &single).unwrap();
+        let single = target_descriptor_requirement(&config, &single)
+            .unwrap()
+            .directories;
         assert_eq!(
-            target_descriptor_requirement(&config, &shared_parent).unwrap(),
+            target_descriptor_requirement(&config, &shared_parent)
+                .unwrap()
+                .directories,
             single
         );
         assert_eq!(
-            target_descriptor_requirement(&config, &distinct_parent).unwrap(),
+            target_descriptor_requirement(&config, &distinct_parent)
+                .unwrap()
+                .directories,
             single + 1
         );
     }
@@ -7326,9 +7375,13 @@ mod tests {
 
         // The plan pins four authority-chain descriptors and 110 relative
         // prefixes. Admission adds the transient descriptor reserve elsewhere.
+        // Absence assertions stage nothing, so they need no leaf descriptors.
         assert_eq!(
             target_descriptor_requirement(&descriptor_config(), &prepared).unwrap(),
-            114
+            DescriptorRequirement {
+                directories: 114,
+                leaves: 0,
+            }
         );
     }
 

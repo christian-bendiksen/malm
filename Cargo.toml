@@ -29,7 +29,7 @@ members = [
   "crates/malm-root",
   "crates/malm-store",
   "crates/malm-tree",
-  "crates/malm-types", "video/showcase-rs",
+  "crates/malm-types",
 ]
 
 [workspace.package]
