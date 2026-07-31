@@ -98,6 +98,22 @@ apply can therefore be repaired even when the original repository is gone.
 Lifecycle and retention changes also use plans, review, and apply. Inspection is
 read-only. Cleanup removes objects only when saved state no longer refers to them.
 
+## Batched Object Durability
+
+Objects are published in batches, but one rule always holds: an object is never
+named until its contents are durable.
+
+- Data is written to unnamed O_TMPFILE inodes and pushed to storage with
+  sync_file_range, which writes no metadata and flushes no device cache.
+- A single fsync then flushes the device cache for the batch.
+- Objects are linked under their digest names, then the directory is synced,
+  committing the entries and the inode metadata alongside them.
+
+A crash before linking only loses unnamed objects, which can be recreated; chunk
+sizes are based on the process file-descriptor limit to keep resource use bounded.
+Batching may miss some per-file writeback errors, but sync_file_range catches most
+failures and fsck detects objects whose contents do not match their digest.
+
 ## Crate Layers
 
 ```text

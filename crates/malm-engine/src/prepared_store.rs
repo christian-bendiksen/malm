@@ -53,12 +53,6 @@ const PREPARED_DIR: &str = "prepared";
 const CONTAINER_MODE: u32 = 0o700;
 const ENTRY_MODE: u32 = 0o400;
 
-#[derive(Clone, Copy, Eq, PartialEq)]
-enum PublishedEntryKind {
-    ArtifactBlob,
-    PreparedRecord,
-}
-
 #[derive(Clone)]
 pub(super) struct ExplicitPreparedState<'a> {
     transition: PreparedTransitionV1,
@@ -416,12 +410,13 @@ fn prepare_inner(
         .map(|artifact| (artifact.id(), artifact.bytes()))
         .collect();
     let mut published_digests = BTreeSet::new();
+    let mut fresh_blobs: Vec<(Digest, &[u8])> = Vec::new();
     for artifact in record.artifacts() {
         if !published_digests.insert(artifact.digest().clone()) {
             continue;
         }
         match request_bytes.get(artifact.id()) {
-            Some(bytes) => publish_blob(&ready, &directories, artifact.digest(), bytes)?,
+            Some(bytes) => fresh_blobs.push((artifact.digest().clone(), bytes)),
             None => {
                 require_retained_blob(
                     &ready,
@@ -432,6 +427,7 @@ fn prepare_inner(
             }
         }
     }
+    publish_blobs(&ready, &directories, &fresh_blobs, engine.open_file_soft_limit())?;
     publish_record(&ready, &directories, &plan_id, &encoded_record)?;
     publication_lock.revalidate(&ready)?;
     let persisted = load_record_from(&ready, &directories, &plan_id)?;
@@ -2753,9 +2749,157 @@ fn ensure_container_bound(
     Ok(())
 }
 
-pub(super) fn publish_blob(
+/// A blob written into an anonymous inode that carries no name yet. Nothing can
+/// reach it until it is linked under its digest, which is allowed only after
+/// the chunk's barrier.
+struct StagedBlob<'a> {
+    file: File,
+    digest: Digest,
+    path: PathBuf,
+    /// Retained so that a concurrent winner of this name can be compared
+    /// against what this publication intended to write.
+    bytes: &'a [u8],
+}
+
+/// Publishes many artifact blobs, paying one barrier and one directory sync per
+/// chunk instead of two syncs per blob.
+///
+/// Blobs are content-addressed, so a blob is either present under its digest or
+/// absent and republished on the next attempt.
+pub(super) fn publish_blobs(
     ready: &ReadyStoreRoot<'_>,
     directories: &PreparedDirectories,
+    blobs: &[(Digest, &[u8])],
+    open_file_soft_limit: Option<u64>,
+) -> Result<(), EngineError> {
+    let chunk_size = crate::durability::staged_chunk_size(open_file_soft_limit);
+    let mut staged: Vec<StagedBlob<'_>> = Vec::new();
+
+    let flush = |staged: &mut Vec<StagedBlob<'_>>| -> Result<(), EngineError> {
+        let Some(first) = staged.first() else {
+            return Ok(());
+        };
+        crate::durability::barrier(&first.file, &first.path)?;
+        for blob in staged.iter() {
+            directories.revalidate(ready)?;
+            match linkat(
+                &blob.file,
+                "",
+                &directories.blobs,
+                blob.digest.as_str(),
+                AtFlags::EMPTY_PATH,
+            ) {
+                Ok(()) => {}
+                Err(rustix::io::Errno::EXIST) => {
+                    // A concurrent writer won the name. Its bytes are verified
+                    // against the digest before they are accepted.
+                    verify_and_sync_existing_entry(
+                        ready,
+                        directories,
+                        &directories.blobs,
+                        blob.digest.as_str(),
+                        &blob.path,
+                        blob.bytes,
+                    )?;
+                }
+                Err(source) => {
+                    return Err(errno_error(
+                        "publish prepared-store entry",
+                        &blob.path,
+                        source,
+                    ));
+                }
+            }
+            engine_failpoint!("v1.prepare.blob.after_publish");
+        }
+        fsync(&directories.blobs).map_err(|source| {
+            errno_error("sync prepared-store directory", &first.path, source)
+        })?;
+        directories.revalidate(ready)?;
+        staged.clear();
+        Ok(())
+    };
+
+    for (digest, bytes) in blobs {
+        if let Some(blob) = stage_blob(ready, directories, digest, bytes)? {
+            staged.push(blob);
+        }
+        if staged.len() >= chunk_size {
+            flush(&mut staged)?;
+        }
+    }
+    flush(&mut staged)
+}
+
+/// Validates a blob and writes it into an anonymous inode. Returns `None` when
+/// the store already holds it, so the caller neither stages nor links it.
+fn stage_blob<'a>(
+    ready: &ReadyStoreRoot<'_>,
+    directories: &PreparedDirectories,
+    digest: &Digest,
+    bytes: &'a [u8],
+) -> Result<Option<StagedBlob<'a>>, EngineError> {
+    let path = blob_path(ready.config.state_root(), digest);
+    validate_blob(ready, digest, bytes)?;
+    if blob_is_cached(ready, directories, digest, bytes, &path)? {
+        engine_failpoint!("v1.prepare.blob.after_publish");
+        return Ok(None);
+    }
+    if statat(
+        &directories.blobs,
+        digest.as_str(),
+        AtFlags::SYMLINK_NOFOLLOW,
+    )
+    .is_ok()
+    {
+        verify_and_sync_existing_entry(
+            ready,
+            directories,
+            &directories.blobs,
+            digest.as_str(),
+            &path,
+            bytes,
+        )?;
+        engine_failpoint!("v1.prepare.blob.after_publish");
+        return Ok(None);
+    }
+
+    let mut temporary = openat2(
+        &directories.blobs,
+        ".",
+        OFlags::TMPFILE | OFlags::RDWR | OFlags::CLOEXEC,
+        Mode::from_raw_mode(ENTRY_MODE),
+        ROOT_RESOLVE_FLAGS,
+    )
+    .map(File::from)
+    .map_err(|source| errno_error("create unnamed prepared-store entry", &path, source))?;
+    fchmod(&temporary, Mode::from_raw_mode(ENTRY_MODE))
+        .map_err(|source| errno_error("set prepared-store entry mode", &path, source))?;
+    temporary
+        .write_all(bytes)
+        .map_err(|source| EngineError::Io {
+            operation: "write prepared-store entry",
+            path: path.clone(),
+            source,
+        })?;
+    temporary.flush().map_err(|source| EngineError::Io {
+        operation: "flush prepared-store entry",
+        path: path.clone(),
+        source,
+    })?;
+    crate::durability::start_writeback(&temporary, &path)?;
+
+    Ok(Some(StagedBlob {
+        file: temporary,
+        digest: digest.clone(),
+        path,
+        bytes,
+    }))
+}
+
+/// Rejects a blob that is too large or whose bytes do not match its digest.
+fn validate_blob(
+    ready: &ReadyStoreRoot<'_>,
     digest: &Digest,
     bytes: &[u8],
 ) -> Result<(), EngineError> {
@@ -2777,39 +2921,33 @@ pub(super) fn publish_blob(
             },
         ));
     }
-    let path = blob_path(ready.config.state_root(), digest);
-    // Cache hits validate the content-addressed name and length. Publication
-    // proved the bytes, and every read verifies the digest again.
+    Ok(())
+}
+
+/// Reports whether the store already holds this blob under its digest with the
+/// expected shape. Publication proved the bytes, and every read verifies the
+/// digest again.
+fn blob_is_cached(
+    ready: &ReadyStoreRoot<'_>,
+    directories: &PreparedDirectories,
+    digest: &Digest,
+    bytes: &[u8],
+    path: &Path,
+) -> Result<bool, EngineError> {
     match statat(
         &directories.blobs,
         digest.as_str(),
         AtFlags::SYMLINK_NOFOLLOW,
     ) {
-        Ok(stat) => {
-            if FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
+        Ok(stat) => Ok(
+            FileType::from_raw_mode(stat.st_mode) == FileType::RegularFile
                 && stat.st_uid == ready.expected_user_id
-                && u64::try_from(stat.st_size).ok() == Some(malm_types::usize_to_u64(bytes.len()))
-            {
-                engine_failpoint!("v1.prepare.blob.after_publish");
-                return Ok(());
-            }
-        }
-        Err(rustix::io::Errno::NOENT) => {}
-        Err(source) => {
-            return Err(errno_error("inspect prepared-store blob", &path, source));
-        }
+                && u64::try_from(stat.st_size).ok()
+                    == Some(malm_types::usize_to_u64(bytes.len())),
+        ),
+        Err(rustix::io::Errno::NOENT) => Ok(false),
+        Err(source) => Err(errno_error("inspect prepared-store blob", path, source)),
     }
-    publish_bytes(
-        ready,
-        directories,
-        &directories.blobs,
-        digest.as_str(),
-        &path,
-        bytes,
-        PublishedEntryKind::ArtifactBlob,
-    )?;
-    engine_failpoint!("v1.prepare.blob.after_publish");
-    Ok(())
 }
 
 /// Stat-proves a retained blob by content-addressed name and exact length.
@@ -2852,7 +2990,6 @@ fn publish_record(
         plan_id.as_str(),
         &record_path(ready.config.state_root(), plan_id),
         encoded_record,
-        PublishedEntryKind::PreparedRecord,
     )?;
     Ok(())
 }
@@ -2864,7 +3001,6 @@ fn publish_bytes(
     leaf: &str,
     path: &Path,
     bytes: &[u8],
-    kind: PublishedEntryKind,
 ) -> Result<(), EngineError> {
     if statat(parent, leaf, AtFlags::SYMLINK_NOFOLLOW).is_ok() {
         return verify_and_sync_existing_entry(ready, directories, parent, leaf, path, bytes);
@@ -2896,9 +3032,7 @@ fn publish_bytes(
     directories.revalidate(ready)?;
     match linkat(&temporary, "", parent, leaf, AtFlags::EMPTY_PATH) {
         Ok(()) => {
-            if kind == PublishedEntryKind::PreparedRecord {
-                engine_failpoint!("v1.prepare.record.after_link");
-            }
+            engine_failpoint!("v1.prepare.record.after_link");
         }
         Err(rustix::io::Errno::EXIST) => {
             verify_and_sync_existing_entry(ready, directories, parent, leaf, path, bytes)?;

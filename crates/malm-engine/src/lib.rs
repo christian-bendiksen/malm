@@ -21,6 +21,7 @@ mod authoring_prepare;
 mod canonical_store;
 mod checkout_prepare;
 mod config_prepare;
+mod durability;
 mod deployment_prepare;
 mod events;
 mod git_acquisition;

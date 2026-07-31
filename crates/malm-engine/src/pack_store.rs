@@ -211,6 +211,7 @@ fn publish_with(
         expected_digest,
         files.iter().map(|file| (file.path(), file.bytes())),
         Some(before_link),
+        engine.open_file_soft_limit(),
     )
 }
 
@@ -265,6 +266,7 @@ pub(super) fn publish_verified(
         verified_digest,
         pack.files(),
         None::<fn()>,
+        engine.open_file_soft_limit(),
     )
 }
 
@@ -278,6 +280,7 @@ fn publish_manifest<'a>(
     digest: &Digest,
     members: impl Iterator<Item = (&'a malm_pack::PackPath, &'a [u8])>,
     before_link: Option<impl FnOnce()>,
+    open_file_soft_limit: Option<u64>,
 ) -> Result<PackObjectPublication, EngineError> {
     let manifests = directories
         .manifests
@@ -288,15 +291,24 @@ fn publish_manifest<'a>(
     let prepared_directories = crate::prepared_store::PreparedDirectories::open(ready, true)?
         .expect("publication creates missing object containers");
     let mut entries = Vec::new();
+    let mut blobs = Vec::new();
     for (path, bytes) in members {
         let blob = Digest::sha256(bytes);
-        crate::prepared_store::publish_blob(ready, &prepared_directories, &blob, bytes)?;
+        blobs.push((blob.clone(), bytes));
         entries.push(PackManifestMemberV1 {
             path: path.clone(),
             blob,
             byte_len: malm_types::usize_to_u64(bytes.len()),
         });
     }
+    // Every member is linked before the manifest naming them is. Batching
+    // changes how many barriers that costs, not the ordering.
+    crate::prepared_store::publish_blobs(
+        ready,
+        &prepared_directories,
+        &blobs,
+        open_file_soft_limit,
+    )?;
     let encoded = encode_pack_manifest_object(&entries);
 
     let mut temporary = openat(

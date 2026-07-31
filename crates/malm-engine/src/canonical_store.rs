@@ -23,6 +23,7 @@ use rustix::fs::{
 
 use super::{
     DIRECTORY_FLAGS, Engine, EngineError, ROOT_RESOLVE_FLAGS, ReadyStoreRoot, StoreAccess,
+    durability::{self, staged_chunk_size, start_writeback},
     errno_error, io_error, prepared_store::PreparedPublicationLock, same_file_snapshot,
     same_object,
 };
@@ -457,36 +458,42 @@ where
     let publication_lock = PreparedPublicationLock::acquire(engine, &ready)?;
     publication_lock.revalidate(&ready)?;
 
+    let chunk_size = staged_chunk_size(engine.open_file_soft_limit());
+
     if let Some((first_digest, _)) = decoded.objects().file_blobs().first_key_value() {
         let directories =
             ObjectDirectories::open(&ready, CanonicalObjectKind::File, first_digest, true)?
                 .expect("archive publication creates the file-object container");
-        for (digest, bytes) in decoded.objects().file_blobs() {
-            publish_to(
-                &ready,
-                &directories,
-                CanonicalObjectKind::File,
-                digest,
-                bytes,
-                before_link,
-            )?;
-        }
+        publish_chunked(
+            &ready,
+            &directories,
+            CanonicalObjectKind::File,
+            decoded
+                .objects()
+                .file_blobs()
+                .iter()
+                .map(|(digest, bytes)| (digest, bytes.as_slice())),
+            before_link,
+            chunk_size,
+        )?;
     }
 
     if let Some((first_digest, _)) = decoded.objects().symlinks().first_key_value() {
         let directories =
             ObjectDirectories::open(&ready, CanonicalObjectKind::Symlink, first_digest, true)?
                 .expect("archive publication creates the symlink-object container");
-        for (digest, object) in decoded.objects().symlinks() {
-            publish_to(
-                &ready,
-                &directories,
-                CanonicalObjectKind::Symlink,
-                digest,
-                object.bytes(),
-                before_link,
-            )?;
-        }
+        publish_chunked(
+            &ready,
+            &directories,
+            CanonicalObjectKind::Symlink,
+            decoded
+                .objects()
+                .symlinks()
+                .iter()
+                .map(|(digest, object)| (digest, object.bytes())),
+            before_link,
+            chunk_size,
+        )?;
     }
 
     let root_digest = decoded.root_digest();
@@ -504,19 +511,23 @@ where
     let directories =
         ObjectDirectories::open(&ready, CanonicalObjectKind::Tree, first_tree_digest, true)?
             .expect("archive publication creates the tree-object container");
-    for (digest, object) in decoded.objects().trees() {
-        if digest != root_digest {
-            publish_to(
-                &ready,
-                &directories,
-                CanonicalObjectKind::Tree,
-                digest,
-                object.bytes(),
-                before_link,
-            )?;
-        }
-    }
+    publish_chunked(
+        &ready,
+        &directories,
+        CanonicalObjectKind::Tree,
+        decoded
+            .objects()
+            .trees()
+            .iter()
+            .filter(|(digest, _)| *digest != root_digest)
+            .map(|(digest, object)| (digest, object.bytes())),
+        before_link,
+        chunk_size,
+    )?;
     ready.revalidate()?;
+    // The root tree is published alone and last, so linking it is what makes
+    // the archive complete. Every other object is already linked and durable
+    // by this point.
     publish_to(
         &ready,
         &directories,
@@ -571,17 +582,35 @@ where
     Ok(publication)
 }
 
-fn publish_to<F>(
+/// Object bytes written into an anonymous inode that carries no name yet.
+///
+/// Nothing can observe a staged object: it becomes reachable only when
+/// [`publish_staged`] links it under its digest, and that is allowed only after
+/// the chunk's barrier.
+struct StagedObject {
+    file: File,
+    kind: CanonicalObjectKind,
+    digest: Digest,
+    path: PathBuf,
+}
+
+/// Outcome of staging: an object already present in the store needs no write.
+enum StageOutcome {
+    Reused,
+    Staged(StagedObject),
+}
+
+/// Writes `bytes` into an anonymous inode below the object directory.
+///
+/// The returned object has no name, so a crash before its barrier loses it
+/// entirely rather than leaving a named object with unwritten content.
+fn stage_object(
     ready: &ReadyStoreRoot<'_>,
     directories: &ObjectDirectories,
     kind: CanonicalObjectKind,
     expected_digest: &Digest,
     bytes: &[u8],
-    before_link: &mut F,
-) -> Result<CanonicalObjectPublication, EngineError>
-where
-    F: FnMut(CanonicalObjectKind, &Digest),
-{
+) -> Result<StageOutcome, EngineError> {
     let path = object_path(ready.config.state_root(), kind, expected_digest);
     let target = CanonicalTarget::new(kind, expected_digest, &path);
     verify_canonical(target, bytes)?;
@@ -596,7 +625,7 @@ where
     ) {
         Ok(stat) => {
             validate_object_stat(target, &stat, 1, ready.expected_user_id)?;
-            return Ok(CanonicalObjectPublication::Reused);
+            return Ok(StageOutcome::Reused);
         }
         Err(rustix::io::Errno::NOENT) => {}
         Err(source) => {
@@ -621,52 +650,166 @@ where
     temporary
         .flush()
         .map_err(|source| io_error("flush unnamed canonical object", &path, source))?;
-    fsync(&temporary)
-        .map_err(|source| errno_error("sync unnamed canonical object", &path, source))?;
+    start_writeback(&temporary, &path)?;
     let staged = fstat(&temporary)
         .map_err(|source| errno_error("inspect unnamed canonical object", &path, source))?;
     validate_object_stat(target, &staged, 0, ready.expected_user_id)?;
 
-    directories.revalidate(ready, expected_digest)?;
-    before_link(kind, expected_digest);
-    directories.revalidate(ready, expected_digest)?;
+    Ok(StageOutcome::Staged(StagedObject {
+        file: temporary,
+        kind,
+        digest: expected_digest.clone(),
+        path,
+    }))
+}
+
+/// Flushes the device cache for the objects staged since the previous barrier.
+/// No object in the chunk is linked before this returns.
+fn barrier(staged: &[StagedObject]) -> Result<(), EngineError> {
+    let Some(first) = staged.first() else {
+        return Ok(());
+    };
+    durability::barrier(&first.file, &first.path)
+}
+
+/// Links a staged object under its digest.
+///
+/// Only correct after [`barrier`] has covered the chunk this object was staged
+/// in.
+fn publish_staged<F>(
+    ready: &ReadyStoreRoot<'_>,
+    directories: &ObjectDirectories,
+    staged: &StagedObject,
+    before_link: &mut F,
+) -> Result<CanonicalObjectPublication, EngineError>
+where
+    F: FnMut(CanonicalObjectKind, &Digest),
+{
+    let StagedObject {
+        file,
+        kind,
+        digest,
+        path,
+    } = staged;
+    let target = CanonicalTarget::new(*kind, digest, path);
+    directories.revalidate(ready, digest)?;
+    before_link(*kind, digest);
+    directories.revalidate(ready, digest)?;
     match linkat(
-        &temporary,
+        file,
         "",
         &directories.kind,
-        expected_digest.as_str(),
+        digest.as_str(),
         AtFlags::EMPTY_PATH,
     ) {
         Ok(()) => {
-            let published = ensure_object_bound(
-                &directories.kind,
-                target,
-                &temporary,
-                ready.expected_user_id,
-            )?;
+            let published =
+                ensure_object_bound(&directories.kind, target, file, ready.expected_user_id)?;
             validate_object_stat(target, &published, 1, ready.expected_user_id)?;
-            fsync(&temporary)
-                .map_err(|source| errno_error("sync published canonical object", &path, source))?;
-            fsync(&directories.kind).map_err(|source| {
-                errno_error(
-                    "sync canonical-object directory",
-                    &directories.kind_path,
-                    source,
-                )
-            })?;
-            directories.revalidate(ready, expected_digest)?;
+            directories.revalidate(ready, digest)?;
             Ok(CanonicalObjectPublication::Published)
         }
         Err(rustix::io::Errno::EXIST) => {
-            read_existing(ready, directories, kind, expected_digest, true)?;
+            read_existing(ready, directories, *kind, digest, true)?;
             Ok(CanonicalObjectPublication::Reused)
         }
         Err(source) => Err(errno_error(
             "publish canonical object without replacement",
-            &path,
+            path,
             source,
         )),
     }
+}
+
+/// Records the directory entries created by a chunk's links.
+fn sync_object_directory(directories: &ObjectDirectories) -> Result<(), EngineError> {
+    fsync(&directories.kind).map_err(|source| {
+        errno_error(
+            "sync canonical-object directory",
+            &directories.kind_path,
+            source,
+        )
+    })
+}
+
+/// Publishes a single object with its own barrier.
+///
+/// Equivalent to a one-object chunk, and used where objects arrive one at a
+/// time rather than as an archive.
+fn publish_to<F>(
+    ready: &ReadyStoreRoot<'_>,
+    directories: &ObjectDirectories,
+    kind: CanonicalObjectKind,
+    expected_digest: &Digest,
+    bytes: &[u8],
+    before_link: &mut F,
+) -> Result<CanonicalObjectPublication, EngineError>
+where
+    F: FnMut(CanonicalObjectKind, &Digest),
+{
+    let staged = match stage_object(ready, directories, kind, expected_digest, bytes)? {
+        StageOutcome::Reused => return Ok(CanonicalObjectPublication::Reused),
+        StageOutcome::Staged(staged) => staged,
+    };
+    barrier(std::slice::from_ref(&staged))?;
+    let publication = publish_staged(ready, directories, &staged, before_link)?;
+    if matches!(publication, CanonicalObjectPublication::Published) {
+        sync_object_directory(directories)?;
+    }
+    Ok(publication)
+}
+
+/// Publishes many objects into one directory, paying one barrier and one
+/// directory sync per chunk instead of three syncs per object.
+fn publish_chunked<'a, F, I>(
+    ready: &ReadyStoreRoot<'_>,
+    directories: &ObjectDirectories,
+    kind: CanonicalObjectKind,
+    objects: I,
+    before_link: &mut F,
+    chunk_size: usize,
+) -> Result<(), EngineError>
+where
+    F: FnMut(CanonicalObjectKind, &Digest),
+    I: IntoIterator<Item = (&'a Digest, &'a [u8])>,
+{
+    let mut staged: Vec<StagedObject> = Vec::new();
+    let mut flush = |staged: &mut Vec<StagedObject>| -> Result<(), EngineError> {
+        if staged.is_empty() {
+            return Ok(());
+        }
+        // Crashing here loses every staged object, because none of them is
+        // named yet.
+        engine_failpoint!("v1.publish.chunk.before_barrier");
+        barrier(staged)?;
+        // Crashing here leaves the batch unnamed, so the store is unchanged and
+        // the next publication rewrites it.
+        engine_failpoint!("v1.publish.chunk.after_barrier");
+        let mut linked = false;
+        for object in staged.iter() {
+            let publication = publish_staged(ready, directories, object, before_link)?;
+            linked |= matches!(publication, CanonicalObjectPublication::Published);
+            // Crashing part-way through the link sweep leaves a prefix of the
+            // batch named.
+            engine_failpoint!("v1.publish.chunk.during_links");
+        }
+        if linked {
+            sync_object_directory(directories)?;
+        }
+        staged.clear();
+        Ok(())
+    };
+
+    for (digest, bytes) in objects {
+        if let StageOutcome::Staged(object) = stage_object(ready, directories, kind, digest, bytes)?
+        {
+            staged.push(object);
+        }
+        if staged.len() >= chunk_size {
+            flush(&mut staged)?;
+        }
+    }
+    flush(&mut staged)
 }
 
 fn load_encoded(

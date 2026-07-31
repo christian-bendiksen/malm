@@ -6430,6 +6430,62 @@ fn directory_entry_names(directory: &File, path: &Path) -> Result<BTreeSet<Vec<u
     Ok(names)
 }
 
+/// Creates one canonical tree file and makes it durable. A failure removes the
+/// partial entry so the caller's cleanup sees a directory it can still reason
+/// about.
+fn materialize_tree_file(
+    directory: &File,
+    leaf: &OsStr,
+    mode: u32,
+    digest: &Digest,
+    canonical: &canonical::CanonicalObjects,
+    child_path: &Path,
+) -> Result<(), CommitError> {
+    let bytes = canonical.files.get(digest).ok_or_else(|| {
+        CommitError::InvalidStore(format!("canonical file object {digest} is missing"))
+    })?;
+    let mut file = openat2(
+        directory,
+        leaf,
+        OFlags::CREATE | OFlags::EXCL | OFlags::WRONLY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::from_raw_mode(mode),
+        ROOT_RESOLVE_FLAGS,
+    )
+    .map(File::from)
+    .map_err(|source| io_error("create canonical tree file", child_path, source))?;
+    let result = (|| {
+        file.write_all(bytes).map_err(|source| CommitError::Io {
+            operation: "write canonical tree file",
+            path: child_path.to_path_buf(),
+            source,
+        })?;
+        fchmod(&file, Mode::from_raw_mode(mode))
+            .map_err(|source| io_error("set canonical tree file mode", child_path, source))?;
+        file.flush().map_err(|source| CommitError::Io {
+            operation: "flush canonical tree file",
+            path: child_path.to_path_buf(),
+            source,
+        })?;
+        fsync(&file).map_err(|source| io_error("sync canonical tree file", child_path, source))
+    })();
+    if let Err(error) = result {
+        return match unlink_pinned_entry(
+            directory,
+            leaf,
+            &file,
+            AtFlags::empty(),
+            child_path,
+            "failed canonical tree file",
+        ) {
+            Ok(()) => Err(error),
+            Err(cleanup) => Err(CommitError::RollbackFailed(format!(
+                "{error}; failed to remove canonical tree file: {cleanup}"
+            ))),
+        };
+    }
+    Ok(())
+}
+
 fn materialize_tree_directory(
     directory: &File,
     digest: &Digest,
@@ -6440,60 +6496,36 @@ fn materialize_tree_directory(
     let tree = canonical.trees.get(digest).ok_or_else(|| {
         CommitError::InvalidStore(format!("canonical tree object {digest} is missing"))
     })?;
+    // Each file is an independent create-write-sync under a name nobody else
+    // touches, and the whole tree is built inside a private staging directory
+    // that is only renamed into place once complete. Nothing observes the
+    // order in which the files land, so the per-file durability barriers can
+    // overlap instead of running back to back.
+    let files = tree
+        .entries
+        .iter()
+        .filter(|entry| matches!(entry.kind, canonical::TreeEntryKind::File { .. }))
+        .collect::<Vec<_>>();
+    parallel_targets(&files, |entry| {
+        let canonical::TreeEntryKind::File { digest, .. } = &entry.kind else {
+            unreachable!("only file entries are collected");
+        };
+        materialize_tree_file(
+            directory,
+            OsStr::from_bytes(entry.name.as_bytes()),
+            entry.mode,
+            digest,
+            canonical,
+            &path.join(&entry.name),
+        )
+    })?;
+
     for entry in &tree.entries {
         let leaf = OsStr::from_bytes(entry.name.as_bytes());
         let child_path = path.join(&entry.name);
         match &entry.kind {
-            canonical::TreeEntryKind::File { digest, .. } => {
-                let bytes = canonical.files.get(digest).ok_or_else(|| {
-                    CommitError::InvalidStore(format!("canonical file object {digest} is missing"))
-                })?;
-                let mut file = openat2(
-                    directory,
-                    leaf,
-                    OFlags::CREATE
-                        | OFlags::EXCL
-                        | OFlags::WRONLY
-                        | OFlags::NOFOLLOW
-                        | OFlags::CLOEXEC,
-                    Mode::from_raw_mode(entry.mode),
-                    ROOT_RESOLVE_FLAGS,
-                )
-                .map(File::from)
-                .map_err(|source| io_error("create canonical tree file", &child_path, source))?;
-                let result = (|| {
-                    file.write_all(bytes).map_err(|source| CommitError::Io {
-                        operation: "write canonical tree file",
-                        path: child_path.clone(),
-                        source,
-                    })?;
-                    fchmod(&file, Mode::from_raw_mode(entry.mode)).map_err(|source| {
-                        io_error("set canonical tree file mode", &child_path, source)
-                    })?;
-                    file.flush().map_err(|source| CommitError::Io {
-                        operation: "flush canonical tree file",
-                        path: child_path.clone(),
-                        source,
-                    })?;
-                    fsync(&file)
-                        .map_err(|source| io_error("sync canonical tree file", &child_path, source))
-                })();
-                if let Err(error) = result {
-                    return match unlink_pinned_entry(
-                        directory,
-                        leaf,
-                        &file,
-                        AtFlags::empty(),
-                        &child_path,
-                        "failed canonical tree file",
-                    ) {
-                        Ok(()) => Err(error),
-                        Err(cleanup) => Err(CommitError::RollbackFailed(format!(
-                            "{error}; failed to remove canonical tree file: {cleanup}"
-                        ))),
-                    };
-                }
-            }
+            // Files are written by the parallel pass above.
+            canonical::TreeEntryKind::File { .. } => {}
             canonical::TreeEntryKind::Symlink { digest } => {
                 let target = canonical
                     .safe_symlink_target(digest)
