@@ -50,6 +50,13 @@ The failure-only `error` object contains `category`, `code`, `message`, and
 most 8,192 characters. Messages and help are human-readable text, not fields to
 parse for compatibility decisions.
 
+When target preparation finds occupied directory leaves that must be moved or
+removed, the failure remains category `conflict` with code `unsafe-target` and
+`data` remains `null`. Its `diagnostics` contains one error diagnostic per
+retained absolute path, up to the envelope limit of 256, using code
+`directory-occupancy-conflict`. The primary message reports the total conflict
+count and the number of additional omitted paths.
+
 JSON Schema length limits count Unicode characters. Implementations must also
 produce valid UTF-8 and the output framing described above.
 

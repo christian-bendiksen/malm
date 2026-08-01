@@ -112,6 +112,51 @@ fn json_error_messages_respect_the_schema_bound() {
 }
 
 #[test]
+fn directory_conflict_diagnostics_use_the_full_cli_v1_bound() {
+    let diagnostics = (0..malm::MAX_DIRECTORY_CONFLICT_PATHS)
+        .map(|index| {
+            serde_json::json!({
+                "severity": "error",
+                "code": "directory-occupancy-conflict",
+                "message": format!("/home/example/.config/blocker-{index:03}"),
+            })
+        })
+        .collect::<Vec<_>>();
+    let mut envelope = serde_json::json!({
+        "schema_version": 1,
+        "command": "plan.create",
+        "outcome": "error",
+        "data": null,
+        "diagnostics": diagnostics,
+        "error": {
+            "category": "conflict",
+            "code": "unsafe-target",
+            "message": "target preparation is blocked by 257 directory occupancy conflicts (1 additional path omitted)",
+            "help": "Back up, move, or remove every listed directory before retrying.",
+        },
+    });
+    assert_cli_envelope(&envelope);
+
+    envelope["diagnostics"]
+        .as_array_mut()
+        .unwrap()
+        .push(serde_json::json!({
+            "severity": "error",
+            "code": "directory-occupancy-conflict",
+            "message": "/home/example/.config/overflow",
+        }));
+    let schema: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("schemas/cli/v1/envelope.schema.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let validator = jsonschema::options().build(&schema).unwrap();
+    assert!(!validator.is_valid(&envelope));
+}
+
+#[test]
 fn redirected_human_output_has_no_ansi_or_progress() {
     let env = TestEnv::new();
     let output = env.malm_without_repo(&["store", "status"]);

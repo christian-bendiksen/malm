@@ -683,6 +683,14 @@ mod classifier_tests {
                 Code::UnsafeTarget,
             ),
             (
+                prepared(PreparedStoreIssue::DirectoryOccupancyConflicts {
+                    paths: vec![PathBuf::from("/private/target")],
+                    omitted_count: 0,
+                }),
+                Category::Conflict,
+                Code::UnsafeTarget,
+            ),
+            (
                 prepared(PreparedStoreIssue::UnknownTargetAuthority(authority())),
                 Category::Conflict,
                 Code::UnsafeTarget,

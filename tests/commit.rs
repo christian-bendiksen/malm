@@ -743,6 +743,12 @@ fn unowned_present_targets_are_refused_or_adopt_behind_consent() {
         fs::Permissions::from_mode(0o700),
     )
     .unwrap();
+    fs::create_dir(target.join("config/unowned-remove")).unwrap();
+    fs::write(
+        target.join("config/unowned-remove/keep.txt"),
+        b"unmanaged directory contents\n",
+    )
+    .unwrap();
     let engine = make_engine(&temp, &target);
     engine.initialize_store().unwrap();
 
@@ -774,6 +780,32 @@ fn unowned_present_targets_are_refused_or_adopt_behind_consent() {
             },
             ..
         } if namespace.as_str() == "workstation" && relative_path == "config/remove.conf"
+    ));
+
+    let remove_directory = engine
+        .prepare_v1(&PrepareRequestV1::from(PrepareRequestPartsV1 {
+            namespace: NamespaceName::new("workstation").unwrap(),
+            expected_head: None,
+            graph_digest: Digest::sha256(b"unowned directory removal"),
+            inputs: vec![],
+            artifacts: vec![],
+            transforms: vec![],
+            findings: vec![],
+            operations: vec![
+                PrepareOperationV1::remove_leaf(
+                    DeploymentName::new("home").unwrap(),
+                    "config/unowned-remove",
+                )
+                .unwrap(),
+            ],
+        }))
+        .unwrap_err();
+    assert!(matches!(
+        remove_directory,
+        EngineError::PreparedStore {
+            reason: PreparedStoreIssue::UnownedTargetMutation { relative_path, .. },
+            ..
+        } if relative_path == "config/unowned-remove"
     ));
 
     // A non-replacing placement cannot adopt an existing leaf; conflict policy
@@ -822,9 +854,13 @@ fn unowned_present_targets_are_refused_or_adopt_behind_consent() {
     assert!(matches!(
         adopt,
         EngineError::PreparedStore {
-            reason: PreparedStoreIssue::UnownedTargetMutation { relative_path, .. },
+            path,
+            reason: PreparedStoreIssue::DirectoryOccupancyConflicts {
+                paths,
+                omitted_count: 0,
+            },
             ..
-        } if relative_path == "config/adopt"
+        } if path == target.join("config/adopt") && paths == vec![path.clone()]
     ));
     assert_eq!(
         fs::read(target.join("config/remove.conf")).unwrap(),
@@ -835,6 +871,333 @@ fn unowned_present_targets_are_refused_or_adopt_behind_consent() {
         b"unmanaged replace\n"
     );
     assert!(target.join("config/adopt").is_dir());
+    assert_eq!(
+        fs::read(target.join("config/unowned-remove/keep.txt")).unwrap(),
+        b"unmanaged directory contents\n"
+    );
+}
+
+#[test]
+fn same_mode_unowned_structural_directory_preserves_unmanaged_siblings() {
+    let _test_guard = test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(target.join("shared")).unwrap();
+    fs::set_permissions(
+        target.join("shared"),
+        fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    fs::write(target.join("shared/unmanaged.txt"), b"keep\n").unwrap();
+    let engine = make_engine(&temp, &target);
+    engine.initialize_store().unwrap();
+    let artifact = ArtifactId::new("shared/managed").unwrap();
+    let prepared = engine
+        .prepare_v1(&PrepareRequestV1::from(PrepareRequestPartsV1 {
+            namespace: NamespaceName::new("workstation").unwrap(),
+            expected_head: None,
+            graph_digest: Digest::sha256(b"structural directory adoption"),
+            inputs: vec![],
+            artifacts: vec![
+                PrepareArtifactV1::new(artifact.clone(), b"managed\n".to_vec(), "text/plain")
+                    .unwrap(),
+            ],
+            transforms: vec![],
+            findings: vec![],
+            operations: vec![
+                PrepareOperationV1::ensure_directory(
+                    DeploymentName::new("home").unwrap(),
+                    "shared",
+                    0o755,
+                )
+                .unwrap(),
+                PrepareOperationV1::place_file(
+                    DeploymentName::new("home").unwrap(),
+                    "shared/managed.txt",
+                    artifact,
+                    0o600,
+                )
+                .unwrap(),
+            ],
+        }))
+        .unwrap();
+
+    commit_prepared(&engine, &prepared);
+    assert_eq!(
+        fs::read(target.join("shared/unmanaged.txt")).unwrap(),
+        b"keep\n"
+    );
+    assert_eq!(
+        fs::read(target.join("shared/managed.txt")).unwrap(),
+        b"managed\n"
+    );
+}
+
+#[test]
+fn occupied_managed_directory_mode_change_succeeds_after_removal() {
+    let _test_guard = test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(target.join("config")).unwrap();
+    let engine = make_engine(&temp, &target);
+    engine.initialize_store().unwrap();
+
+    let directory_request = |expected_head, mode| {
+        PrepareRequestV1::from(PrepareRequestPartsV1 {
+            namespace: NamespaceName::new("workstation").unwrap(),
+            expected_head,
+            graph_digest: Digest::sha256(format!("directory mode {mode:o}").as_bytes()),
+            inputs: vec![],
+            artifacts: vec![],
+            transforms: vec![],
+            findings: vec![],
+            operations: vec![
+                PrepareOperationV1::ensure_directory(
+                    DeploymentName::new("home").unwrap(),
+                    "config/generated",
+                    mode,
+                )
+                .unwrap(),
+            ],
+        })
+    };
+    let first = engine.prepare_v1(&directory_request(None, 0o750)).unwrap();
+    let first = commit_prepared(&engine, &first);
+    fs::write(
+        target.join("config/generated/unmanaged.txt"),
+        b"blocking contents\n",
+    )
+    .unwrap();
+
+    let blocked = engine
+        .prepare_v1(&directory_request(Some(first.head().clone()), 0o700))
+        .unwrap_err();
+    assert!(matches!(
+        blocked,
+        EngineError::PreparedStore {
+            reason: PreparedStoreIssue::DirectoryOccupancyConflicts {
+                paths,
+                omitted_count: 0,
+            },
+            ..
+        } if paths == vec![target.join("config/generated")]
+    ));
+    assert_eq!(
+        fs::read(target.join("config/generated/unmanaged.txt")).unwrap(),
+        b"blocking contents\n"
+    );
+
+    fs::remove_dir_all(target.join("config/generated")).unwrap();
+    let retried = engine
+        .prepare_v1(&directory_request(Some(first.head().clone()), 0o700))
+        .unwrap();
+    commit_prepared(&engine, &retried);
+    assert_eq!(
+        fs::metadata(target.join("config/generated"))
+            .unwrap()
+            .permissions()
+            .mode()
+            & 0o777,
+        0o700
+    );
+}
+
+#[test]
+fn directory_conflicts_are_sorted_bounded_and_publish_no_artifacts() {
+    let _test_guard = test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(target.join("config")).unwrap();
+    let engine = make_engine(&temp, &target);
+    engine.initialize_store().unwrap();
+
+    let mut artifacts = Vec::new();
+    let mut operations = Vec::new();
+    for index in (0..257).rev() {
+        let relative_path = format!("config/blocker-{index:03}");
+        fs::create_dir(target.join(&relative_path)).unwrap();
+        let artifact_id = ArtifactId::new(format!("blocker-{index:03}")).unwrap();
+        artifacts.push(
+            PrepareArtifactV1::new(
+                artifact_id.clone(),
+                format!("artifact {index}\n").into_bytes(),
+                "text/plain",
+            )
+            .unwrap(),
+        );
+        operations.push(
+            PrepareOperationV1::place_file(
+                DeploymentName::new("home").unwrap(),
+                relative_path,
+                artifact_id,
+                0o600,
+            )
+            .unwrap(),
+        );
+    }
+    let first_digest = Digest::sha256(b"artifact 0\n");
+    let error = engine
+        .prepare_v1(&PrepareRequestV1::from(PrepareRequestPartsV1 {
+            namespace: NamespaceName::new("workstation").unwrap(),
+            expected_head: None,
+            graph_digest: Digest::sha256(b"bounded directory conflicts"),
+            inputs: vec![],
+            artifacts,
+            transforms: vec![],
+            findings: vec![],
+            operations,
+        }))
+        .unwrap_err();
+
+    let EngineError::PreparedStore {
+        path,
+        reason:
+            PreparedStoreIssue::DirectoryOccupancyConflicts {
+                paths,
+                omitted_count,
+            },
+    } = error
+    else {
+        panic!("unexpected preparation error: {error:?}")
+    };
+    assert_eq!(path, target.join("config/blocker-000"));
+    assert_eq!(paths.len(), malm::MAX_DIRECTORY_CONFLICT_PATHS);
+    assert_eq!(paths.first(), Some(&target.join("config/blocker-000")));
+    assert_eq!(paths.last(), Some(&target.join("config/blocker-255")));
+    assert_eq!(omitted_count, 1);
+    assert!(!engine.config().state_root().join("prepared").exists());
+    assert!(
+        !engine
+            .config()
+            .state_root()
+            .join("objects/blobs")
+            .join(first_digest.as_str())
+            .exists()
+    );
+    assert!(target.join("config/blocker-256").is_dir());
+}
+
+#[test]
+fn later_hard_observation_error_takes_precedence_over_collected_conflicts() {
+    let _test_guard = test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(target.join("blocked")).unwrap();
+    let engine = make_engine(&temp, &target);
+    engine.initialize_store().unwrap();
+    let first = ArtifactId::new("first").unwrap();
+    let second = ArtifactId::new("second").unwrap();
+
+    let error = engine
+        .prepare_v1(&PrepareRequestV1::from(PrepareRequestPartsV1 {
+            namespace: NamespaceName::new("workstation").unwrap(),
+            expected_head: None,
+            graph_digest: Digest::sha256(b"hard observation precedence"),
+            inputs: vec![],
+            artifacts: vec![
+                PrepareArtifactV1::new(first.clone(), b"first\n".to_vec(), "text/plain").unwrap(),
+                PrepareArtifactV1::new(second.clone(), b"second\n".to_vec(), "text/plain")
+                    .unwrap(),
+            ],
+            transforms: vec![],
+            findings: vec![],
+            operations: vec![
+                PrepareOperationV1::place_file(
+                    DeploymentName::new("home").unwrap(),
+                    "blocked",
+                    first,
+                    0o600,
+                )
+                .unwrap(),
+                PrepareOperationV1::place_file(
+                    DeploymentName::new("unknown").unwrap(),
+                    "later",
+                    second,
+                    0o600,
+                )
+                .unwrap(),
+            ],
+        }))
+        .unwrap_err();
+
+    assert!(matches!(
+        error,
+        EngineError::PreparedStore {
+            reason: PreparedStoreIssue::UnknownTargetAuthority(authority),
+            ..
+        } if authority.as_str() == "unknown"
+    ));
+}
+
+#[test]
+fn occupancy_precedes_cross_namespace_ownership_until_directory_is_removed() {
+    let _test_guard = test_guard();
+    let temp = tempfile::tempdir().unwrap();
+    let target = temp.path().join("target");
+    fs::create_dir(&target).unwrap();
+    fs::create_dir(target.join("config")).unwrap();
+    let engine = make_engine(&temp, &target);
+    engine.initialize_store().unwrap();
+    let alpha = engine
+        .prepare_v1(&namespace_file_request(
+            "alpha",
+            None,
+            "config/shared.conf",
+            b"alpha\n",
+            false,
+        ))
+        .unwrap();
+    commit_prepared(&engine, &alpha);
+    fs::remove_file(target.join("config/shared.conf")).unwrap();
+    fs::create_dir(target.join("config/shared.conf")).unwrap();
+    fs::write(
+        target.join("config/shared.conf/unmanaged.txt"),
+        b"blocking\n",
+    )
+    .unwrap();
+
+    let blocked = engine
+        .prepare_v1(&namespace_file_request(
+            "beta",
+            None,
+            "config/shared.conf",
+            b"beta\n",
+            true,
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        blocked,
+        EngineError::PreparedStore {
+            reason: PreparedStoreIssue::DirectoryOccupancyConflicts { .. },
+            ..
+        }
+    ));
+
+    fs::remove_dir_all(target.join("config/shared.conf")).unwrap();
+    let ownership = engine
+        .prepare_v1(&namespace_file_request(
+            "beta",
+            None,
+            "config/shared.conf",
+            b"beta\n",
+            true,
+        ))
+        .unwrap_err();
+    assert!(matches!(
+        ownership,
+        EngineError::PreparedStore {
+            reason: PreparedStoreIssue::TargetOwnershipConflict {
+                requesting_namespace,
+                owning_namespace,
+                ..
+            },
+            ..
+        } if requesting_namespace.as_str() == "beta" && owning_namespace.as_str() == "alpha"
+    ));
 }
 
 #[test]

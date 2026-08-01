@@ -7,9 +7,9 @@ use std::time::{Duration, Instant};
 
 use common::TestEnv;
 use malm_machine::{
-    MAX_MACHINE_FRAME_BYTES, MachineErrorCodeV1, MachineOperationV1, MachineRequestV1,
-    MachineResultV1, RequestEnvelopeV1, RequestIdV1, ServerFrameV1, decode_server_frame_v1,
-    encode_request_v1,
+    MAX_MACHINE_FRAME_BYTES, MachineErrorCodeV1, MachineErrorDetailsV1, MachineOperationV1,
+    MachineRequestV1, MachineResultV1, RequestEnvelopeV1, RequestIdV1, ServerFrameV1,
+    decode_server_frame_v1, encode_request_v1,
 };
 use malm_types::{
     ApprovalV1, ArtifactId, CheckoutRequestV1, CommitRequestV1, DeploymentName, Digest,
@@ -170,6 +170,58 @@ fn engine_failures_are_correlated_without_leaking_host_paths() {
     assert!(!encoded.contains(env.home().to_str().unwrap()));
     assert!(!encoded.contains("malm-v1"));
     assert!(!encoded.contains("os error"));
+}
+
+#[test]
+fn directory_occupancy_conflicts_remain_generic_and_path_free() {
+    let env = TestEnv::new();
+    assert!(
+        run_request(&env, "init", MachineRequestV1::InitializeStore)
+            .status
+            .success()
+    );
+    let blocked = env.home().join("private-directory-name");
+    std::fs::create_dir(&blocked).unwrap();
+    std::fs::write(blocked.join("private-entry-name"), b"private\n").unwrap();
+    let artifact = ArtifactId::new("blocked-file").unwrap();
+    let output = run_request(
+        &env,
+        "blocked",
+        MachineRequestV1::Prepare(PrepareRequestV1::from(PrepareRequestPartsV1 {
+            namespace: NamespaceName::new("workstation").unwrap(),
+            expected_head: None,
+            graph_digest: Digest::sha256(b"directory occupancy machine request"),
+            inputs: vec![],
+            artifacts: vec![
+                PrepareArtifactV1::new(artifact.clone(), b"managed\n".to_vec(), "text/plain")
+                    .unwrap(),
+            ],
+            transforms: vec![],
+            findings: vec![],
+            operations: vec![
+                PrepareOperationV1::place_file(
+                    DeploymentName::new("home").unwrap(),
+                    "private-directory-name",
+                    artifact,
+                    0o600,
+                )
+                .unwrap(),
+            ],
+        })),
+    );
+
+    assert_eq!(output.status.code(), Some(2));
+    let records = frames(&output);
+    let ServerFrameV1::Error { error, .. } = &records[1] else {
+        panic!("machine request did not return an error: {records:?}")
+    };
+    assert_eq!(error.code(), MachineErrorCodeV1::UnsafeTarget);
+    assert_eq!(error.details(), MachineErrorDetailsV1::None);
+    assert!(error.diagnostics().is_empty());
+    let encoded = String::from_utf8(output.stdout).unwrap();
+    assert!(!encoded.contains(env.home().to_str().unwrap()));
+    assert!(!encoded.contains("private-directory-name"));
+    assert!(!encoded.contains("private-entry-name"));
 }
 
 #[test]

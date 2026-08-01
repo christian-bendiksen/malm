@@ -1152,6 +1152,9 @@ pub enum DirectorySafetyIssue {
     },
 }
 
+/// Maximum number of directory occupancy conflict paths retained for diagnostics.
+pub const MAX_DIRECTORY_CONFLICT_PATHS: usize = 256;
+
 /// Typed reason prepared-plan storage or target observation failed.
 #[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
 #[non_exhaustive]
@@ -1209,6 +1212,19 @@ pub enum PreparedStoreIssue {
     },
     #[error("target authority {0} is not configured")]
     UnknownTargetAuthority(malm_types::DeploymentName),
+    /// Exact directory leaves that must be moved or removed before preparation
+    /// can continue. `paths` is non-empty, sorted, and bounded by
+    /// [`MAX_DIRECTORY_CONFLICT_PATHS`].
+    #[error(
+        "directory occupancy conflicts block target preparation ({} paths retained, {omitted_count} omitted)",
+        .paths.len()
+    )]
+    DirectoryOccupancyConflicts {
+        /// Lexicographically first absolute blocker paths.
+        paths: Vec<PathBuf>,
+        /// Additional unique blocker paths omitted from `paths`.
+        omitted_count: usize,
+    },
     /// A managed target's on-disk content drifted and the plan carries no
     /// artifact that could restore it.
     #[error(

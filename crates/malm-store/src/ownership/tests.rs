@@ -228,6 +228,97 @@ fn reconciliation_requires_every_pairwise_kind_and_directory_mode_change() {
 }
 
 #[test]
+fn directory_mode_change_accepts_absent_leaf_after_explicit_remediation() {
+    let authority = DeploymentName::new("home").unwrap();
+    let previous = DesiredSnapshotV1::new(vec![
+        StateTargetV1::new(
+            authority.clone(),
+            "managed",
+            StateTargetStateV1::Directory {
+                directory: Some(StateDirectoryV1::new(0o750).unwrap()),
+            },
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let next = DesiredSnapshotV1::new(vec![
+        StateTargetV1::new(
+            authority.clone(),
+            "managed",
+            StateTargetStateV1::Directory {
+                directory: Some(StateDirectoryV1::new(0o700).unwrap()),
+            },
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let operation = PreparedOperationV1::EnsureDirectory {
+        observation: TargetObservationV1::new(
+            authority,
+            "managed",
+            identity(1),
+            vec![],
+            identity(2),
+            LeafObservationV1::Absent,
+        )
+        .unwrap(),
+        mode: 0o700,
+    };
+
+    validate_operation_manifest_v1(
+        Some((LifecycleStateV1::Enabled, &previous)),
+        LifecycleStateV1::Enabled,
+        &next,
+        &[],
+        &[operation],
+    )
+    .unwrap();
+}
+
+#[test]
+fn present_unowned_directory_still_requires_structural_same_mode_adoption() {
+    let authority = DeploymentName::new("home").unwrap();
+    let next = DesiredSnapshotV1::new(vec![
+        StateTargetV1::new(
+            authority.clone(),
+            "managed",
+            StateTargetStateV1::Directory {
+                directory: Some(StateDirectoryV1::new(0o700).unwrap()),
+            },
+        )
+        .unwrap(),
+    ])
+    .unwrap();
+    let mut leaf = identity(3);
+    leaf.mode = 0o040_700;
+    let operation = PreparedOperationV1::AssertExact {
+        observation: TargetObservationV1::new(
+            authority,
+            "managed",
+            identity(1),
+            vec![],
+            identity(2),
+            LeafObservationV1::Present(leaf),
+        )
+        .unwrap(),
+        state: StateTargetStateV1::Directory {
+            directory: Some(StateDirectoryV1::new(0o700).unwrap()),
+        },
+    };
+
+    assert!(
+        validate_operation_manifest_v1(
+            None,
+            LifecycleStateV1::Enabled,
+            &next,
+            &[],
+            &[operation],
+        )
+        .is_err()
+    );
+}
+
+#[test]
 fn ownership_projection_rejects_exact_cross_namespace_conflicts() {
     let alpha = test_generation("alpha", vec![state_target("home", "config/file", true)]);
     let beta = test_generation("beta", vec![state_target("home", "config/file", true)]);

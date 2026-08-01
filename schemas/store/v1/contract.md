@@ -200,6 +200,13 @@ directory removal is limited to an observed empty directory. A previously
 managed canonical tree is instead verified recursively before its nonempty root
 enters the same journaled backup transition.
 
+An `ensure-directory` required for a managed directory mode change may observe
+the leaf absent even when the predecessor slot was present. This permits an
+explicitly remediated occupied directory to be moved or removed before a retry;
+commit recreates the absent directory with the required mode. A present
+unowned directory is not adopted this way. It may satisfy the required mutation
+only as a same-mode exact structural directory containing another operation.
+
 When a managed directory contains effective managed descendants, a transition
 removes those descendants and releases ownership of the directory without
 unlinking the structural container. This preserves unmanaged siblings and lets

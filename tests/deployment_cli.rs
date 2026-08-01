@@ -2192,7 +2192,7 @@ fn absent_store_is_rejected_up_front_with_the_bootstrap_hint() {
 }
 
 #[test]
-fn unmanaged_nonempty_directory_at_a_target_names_entries_and_remediation() {
+fn unmanaged_directory_conflict_lists_only_paths_and_static_remediation() {
     let env = TestEnv::new();
     write_authoring_pack(&env);
     assert!(env.malm(&["store", "init"]).status.success());
@@ -2205,14 +2205,49 @@ fn unmanaged_nonempty_directory_at_a_target_names_entries_and_remediation() {
     let refused = env.malm(&["plan", "create", "--source", &source]);
     assert_eq!(refused.status.code(), Some(2));
     let stderr = String::from_utf8_lossy(&refused.stderr);
-    assert!(
-        stderr.contains("directory is not empty and is not managed by malm"),
-        "{stderr}"
-    );
-    assert!(stderr.contains("\"old.txt\", \"stale.txt\""), "{stderr}");
-    assert!(stderr.contains("mv -- "), "{stderr}");
-    assert!(stderr.contains("greeting.conf.backup"), "{stderr}");
+    assert!(stderr.contains("error[unsafe-target]"), "{stderr}");
+    assert!(stderr.contains("Blocked directories"), "{stderr}");
+    assert!(stderr.contains(blocking.to_str().unwrap()), "{stderr}");
+    assert!(stderr.contains("Back up, move, or remove every listed directory"), "{stderr}");
+    assert!(!stderr.contains("old.txt"), "{stderr}");
+    assert!(!stderr.contains("stale.txt"), "{stderr}");
+    assert!(!stderr.contains("mv --"), "{stderr}");
     assert_eq!(fs::read(blocking.join("stale.txt")).unwrap(), b"stale");
+
+    let deploy = env.malm(&["deploy", "--source", &source]);
+    assert_eq!(deploy.status.code(), Some(2));
+    let deploy_stderr = String::from_utf8_lossy(&deploy.stderr);
+    assert!(
+        deploy_stderr.contains("error[unsafe-target]"),
+        "{deploy_stderr}"
+    );
+    assert!(
+        deploy_stderr.contains(blocking.to_str().unwrap()),
+        "{deploy_stderr}"
+    );
+
+    let json = env.malm(&[
+        "plan",
+        "create",
+        "--source",
+        &source,
+        "--format",
+        "json",
+    ]);
+    assert_eq!(json.status.code(), Some(2));
+    let envelope: serde_json::Value = serde_json::from_slice(&json.stderr).unwrap();
+    assert_eq!(envelope["data"], serde_json::Value::Null);
+    assert_eq!(envelope["error"]["category"], "conflict");
+    assert_eq!(envelope["error"]["code"], "unsafe-target");
+    assert_eq!(envelope["diagnostics"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        envelope["diagnostics"][0],
+        serde_json::json!({
+            "severity": "error",
+            "code": "directory-occupancy-conflict",
+            "message": blocking.to_str().unwrap(),
+        })
+    );
 
     let moved = env.home().join(".config/greeter/greeting.conf.backup");
     fs::rename(&blocking, &moved).unwrap();

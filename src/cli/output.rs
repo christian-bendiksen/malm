@@ -1,7 +1,7 @@
 //! Presentation and error-vocabulary boundary for human and structured CLI output.
 
 use std::io::{IsTerminal, Write as _};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
@@ -11,7 +11,8 @@ use serde_json::Value;
 use super::{ColorChoice, OutputFormat, OutputOptions};
 use crate::{
     CommitError, DiagnosticEvent, DiagnosticSink, EngineError, EngineOperation, EnginePorts,
-    PreparedStoreIssue, ProgressEvent, ProgressSink,
+    PreparedStoreIssue, ProfileSwitchError, ProgressEvent, ProgressSink,
+    StaticDeploymentPrepareError, StaticPrepareError, TrackedRootError,
 };
 
 const MAX_ERROR_CHARS: usize = 8_192;
@@ -170,6 +171,9 @@ impl Output {
     }
 
     pub(super) fn error(self, error: &anyhow::Error) -> Result<()> {
+        if let Some(conflicts) = directory_occupancy_conflicts(error) {
+            return self.directory_occupancy_error(conflicts);
+        }
         let code = error_code(error);
         let message = bounded(error.to_string());
         let details = self.verbose().then(|| bounded(format!("{error:#}")));
@@ -214,6 +218,164 @@ impl Output {
             out_line(&mut rendered, format_args!("\nDetails\n  {details}"));
         }
         write_stderr(rendered.as_bytes())
+    }
+
+    fn directory_occupancy_error(
+        self,
+        conflicts: DirectoryOccupancyConflicts<'_>,
+    ) -> Result<()> {
+        const CODE: &str = "unsafe-target";
+        const HELP: &str =
+            "Back up, move, or remove every listed directory before retrying.";
+        let message = bounded(directory_occupancy_message(
+            conflicts.paths.len(),
+            conflicts.omitted_count,
+        ));
+        if self.is_json() {
+            let diagnostics = conflicts
+                .paths
+                .iter()
+                .map(|path| CliDiagnostic {
+                    severity: "error",
+                    code: "directory-occupancy-conflict".to_owned(),
+                    message: bounded(path.to_string_lossy().into_owned()),
+                })
+                .collect();
+            let envelope = ErrorEnvelope {
+                schema_version: 1,
+                command: self.command,
+                outcome: "error",
+                data: None,
+                diagnostics,
+                error: CliError {
+                    category: "conflict",
+                    code: CODE,
+                    message: &message,
+                    help: Some(HELP),
+                },
+            };
+            return write_json_stderr(&envelope);
+        }
+
+        let mut rendered = String::new();
+        let label = paint(&format!("error[{CODE}]"), Tone::Error, self.stderr_color);
+        out_line(&mut rendered, format_args!("{label}: {message}"));
+        out_line(&mut rendered, format_args!("\nBlocked directories"));
+        for path in conflicts.paths {
+            out_line(&mut rendered, format_args!("  {}", path.display()));
+        }
+        out_line(&mut rendered, format_args!("\n{HELP}"));
+        write_stderr(rendered.as_bytes())
+    }
+}
+
+#[derive(Clone, Copy)]
+struct DirectoryOccupancyConflicts<'a> {
+    paths: &'a [PathBuf],
+    omitted_count: usize,
+}
+
+fn directory_occupancy_message(retained_count: usize, omitted_count: usize) -> String {
+    let total = retained_count.saturating_add(omitted_count);
+    let noun = if total == 1 { "conflict" } else { "conflicts" };
+    if omitted_count == 0 {
+        format!("target preparation is blocked by {total} directory occupancy {noun}")
+    } else {
+        let path = if omitted_count == 1 { "path" } else { "paths" };
+        format!(
+            "target preparation is blocked by {total} directory occupancy {noun} \
+             ({omitted_count} additional {path} omitted)"
+        )
+    }
+}
+
+fn directory_occupancy_conflicts(
+    error: &anyhow::Error,
+) -> Option<DirectoryOccupancyConflicts<'_>> {
+    for cause in error.chain() {
+        if let Some(error) = cause.downcast_ref::<EngineError>()
+            && let Some(conflicts) = engine_directory_occupancy_conflicts(error)
+        {
+            return Some(conflicts);
+        }
+        if let Some(error) = cause.downcast_ref::<StaticPrepareError>()
+            && let Some(conflicts) = static_directory_occupancy_conflicts(error)
+        {
+            return Some(conflicts);
+        }
+        if let Some(error) = cause.downcast_ref::<StaticDeploymentPrepareError>()
+            && let Some(conflicts) = deployment_directory_occupancy_conflicts(error)
+        {
+            return Some(conflicts);
+        }
+        if let Some(error) = cause.downcast_ref::<TrackedRootError>()
+            && let Some(conflicts) = tracked_directory_occupancy_conflicts(error)
+        {
+            return Some(conflicts);
+        }
+        if let Some(error) = cause.downcast_ref::<ProfileSwitchError>()
+            && let Some(conflicts) = profile_directory_occupancy_conflicts(error)
+        {
+            return Some(conflicts);
+        }
+    }
+    None
+}
+
+fn engine_directory_occupancy_conflicts(
+    error: &EngineError,
+) -> Option<DirectoryOccupancyConflicts<'_>> {
+    match error {
+        EngineError::PreparedStore {
+            reason:
+                PreparedStoreIssue::DirectoryOccupancyConflicts {
+                    paths,
+                    omitted_count,
+                },
+            ..
+        } => Some(DirectoryOccupancyConflicts {
+            paths,
+            omitted_count: *omitted_count,
+        }),
+        _ => None,
+    }
+}
+
+fn static_directory_occupancy_conflicts(
+    error: &StaticPrepareError,
+) -> Option<DirectoryOccupancyConflicts<'_>> {
+    match error {
+        StaticPrepareError::Store(error) => engine_directory_occupancy_conflicts(error),
+        _ => None,
+    }
+}
+
+fn deployment_directory_occupancy_conflicts(
+    error: &StaticDeploymentPrepareError,
+) -> Option<DirectoryOccupancyConflicts<'_>> {
+    match error {
+        StaticDeploymentPrepareError::Static(error) => static_directory_occupancy_conflicts(error),
+        _ => None,
+    }
+}
+
+fn tracked_directory_occupancy_conflicts(
+    error: &TrackedRootError,
+) -> Option<DirectoryOccupancyConflicts<'_>> {
+    match error {
+        TrackedRootError::Source(error) => engine_directory_occupancy_conflicts(error),
+        TrackedRootError::Static(error) => static_directory_occupancy_conflicts(error),
+        _ => None,
+    }
+}
+
+fn profile_directory_occupancy_conflicts(
+    error: &ProfileSwitchError,
+) -> Option<DirectoryOccupancyConflicts<'_>> {
+    match error {
+        ProfileSwitchError::RetainedPlan(error) => engine_directory_occupancy_conflicts(error),
+        ProfileSwitchError::Static(error) => static_directory_occupancy_conflicts(error),
+        _ => None,
     }
 }
 
@@ -498,6 +660,7 @@ pub(super) fn classify_engine_error(error: &EngineError) -> EngineErrorClass {
             PreparedStoreIssue::PublicationBusy => EngineErrorClass::PreparedBusy,
             PreparedStoreIssue::StaleNamespaceHead { .. } => EngineErrorClass::PreparedStaleHead,
             PreparedStoreIssue::UnsafeTarget { .. }
+            | PreparedStoreIssue::DirectoryOccupancyConflicts { .. }
             | PreparedStoreIssue::UnknownTargetAuthority(_)
             | PreparedStoreIssue::TargetOwnershipConflict { .. }
             | PreparedStoreIssue::UnownedTargetMutation { .. } => {
@@ -623,7 +786,10 @@ fn error_help(code: &str) -> Option<&'static str> {
 mod classifier_tests {
     use std::path::PathBuf;
 
-    use super::{CommitErrorClass, commit_class_code, commit_error_code, engine_error_code};
+    use super::{
+        CommitErrorClass, commit_class_code, commit_error_code, directory_occupancy_conflicts,
+        engine_error_code,
+    };
     use crate::{
         CommitError, DirectorySafetyIssue, EngineError, OwnershipOverlapKindV1,
         PreparedStoreIssue, StateDirectory, StoreMetadataIssue, StoreStatus,
@@ -819,6 +985,13 @@ mod classifier_tests {
                 "unsafe-target",
             ),
             (
+                prepared(PreparedStoreIssue::DirectoryOccupancyConflicts {
+                    paths: vec![PathBuf::from("/target")],
+                    omitted_count: 0,
+                }),
+                "unsafe-target",
+            ),
+            (
                 prepared(PreparedStoreIssue::UnknownTargetAuthority(authority())),
                 "unsafe-target",
             ),
@@ -879,5 +1052,39 @@ mod classifier_tests {
             commit_class_code(CommitErrorClass::Other),
             "invalid-deployment"
         );
+    }
+
+    #[test]
+    fn directory_conflicts_are_extracted_through_non_chained_wrappers() {
+        fn conflict() -> EngineError {
+            EngineError::PreparedStore {
+                path: PathBuf::from("/target/a"),
+                reason: PreparedStoreIssue::DirectoryOccupancyConflicts {
+                    paths: vec![PathBuf::from("/target/a"), PathBuf::from("/target/b")],
+                    omitted_count: 3,
+                },
+            }
+        }
+
+        let errors = vec![
+            anyhow::Error::new(conflict()),
+            anyhow::Error::new(crate::StaticPrepareError::Store(conflict())),
+            anyhow::Error::new(crate::StaticDeploymentPrepareError::Static(
+                crate::StaticPrepareError::Store(conflict()),
+            )),
+            anyhow::Error::new(crate::TrackedRootError::Source(conflict())),
+            anyhow::Error::new(crate::TrackedRootError::Static(
+                crate::StaticPrepareError::Store(conflict()),
+            )),
+            anyhow::Error::new(crate::ProfileSwitchError::RetainedPlan(conflict())),
+            anyhow::Error::new(crate::ProfileSwitchError::Static(
+                crate::StaticPrepareError::Store(conflict()),
+            )),
+        ];
+        for error in errors {
+            let conflicts = directory_occupancy_conflicts(&error).unwrap();
+            assert_eq!(conflicts.paths.len(), 2);
+            assert_eq!(conflicts.omitted_count, 3);
+        }
     }
 }

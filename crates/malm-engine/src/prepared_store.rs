@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs::File,
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -42,9 +42,9 @@ use rustix::fs::{
 
 use super::mount_identity::directory_is_mount_alias_of;
 use super::{
-    DIRECTORY_FLAGS, Engine, EngineError, PinnedDirectoryChain, PreparedStoreIssue, RESOLVE_FLAGS,
-    ROOT_DIRECTORY_FLAGS, ROOT_RESOLVE_FLAGS, ReadyStoreRoot, StoreAccess, directory_contains,
-    errno_error, same_file_snapshot, same_object,
+    DIRECTORY_FLAGS, Engine, EngineError, MAX_DIRECTORY_CONFLICT_PATHS, PinnedDirectoryChain,
+    PreparedStoreIssue, RESOLVE_FLAGS, ROOT_DIRECTORY_FLAGS, ROOT_RESOLVE_FLAGS, ReadyStoreRoot,
+    StoreAccess, directory_contains, errno_error, same_file_snapshot, same_object,
 };
 
 const OBJECTS_DIR: &str = "objects";
@@ -311,10 +311,38 @@ fn prepare_inner(
         reconcile_local_modifications(engine, previous.as_ref(), requested_operations, &artifacts)?;
     verify_canonical_operations(engine, &requested_operations)?;
     verify_previous_canonical_operations(engine, previous.as_ref(), &requested_operations)?;
-    let operations = requested_operations
-        .iter()
-        .map(|operation| observe_operation(engine, &ready, operation, previous.as_ref()))
-        .collect::<Result<Vec<_>, _>>()?;
+    let structural_directories = structural_ensure_directories(&requested_operations);
+    let mut operations = Vec::with_capacity(requested_operations.len());
+    let mut blocked_directories = BTreeSet::new();
+    for operation in &requested_operations {
+        let structural = structural_directories
+            .get(operation.authority())
+            .is_some_and(|paths| paths.contains(operation.relative_path()));
+        match observe_operation(engine, &ready, operation, previous.as_ref(), structural)? {
+            OperationObservation::Ready(operation) => operations.push(operation),
+            OperationObservation::BlockedDirectory(path) => {
+                blocked_directories.insert(path);
+            }
+        }
+    }
+    if !blocked_directories.is_empty() {
+        let total = blocked_directories.len();
+        let paths = blocked_directories
+            .into_iter()
+            .take(MAX_DIRECTORY_CONFLICT_PATHS)
+            .collect::<Vec<_>>();
+        let path = paths
+            .first()
+            .expect("a non-empty blocker set retains at least one path")
+            .clone();
+        return Err(prepared_error(
+            &path,
+            PreparedStoreIssue::DirectoryOccupancyConflicts {
+                omitted_count: total - paths.len(),
+                paths,
+            },
+        ));
+    }
     verify_missing_ancestor_coverage(engine, &operations)?;
     let synthesized_keys: BTreeSet<(DeploymentName, String)> = synthesized_directories
         .iter()
@@ -404,7 +432,7 @@ fn prepare_inner(
     let directories = PreparedDirectories::open(&ready, true)?
         .expect("prepared publication creates required containers");
     directories.revalidate(&ready)?;
-    let request_bytes: std::collections::BTreeMap<&ArtifactId, &[u8]> = request
+    let request_bytes: BTreeMap<&ArtifactId, &[u8]> = request
         .artifacts()
         .iter()
         .map(|artifact| (artifact.id(), artifact.bytes()))
@@ -477,7 +505,7 @@ fn reconcile_local_modifications(
                 artifact.id().clone(),
             )
         })
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let digest_candidates: Vec<(DeploymentName, String)> = operations
         .iter()
         .filter(|operation| {
@@ -500,7 +528,7 @@ fn reconcile_local_modifications(
     // Files whose live identity matches the previous commit's observation
     // are proven to hold the recorded digest without reading them; every
     // userspace modification bumps ctime, which userspace cannot set.
-    let observed: std::collections::BTreeMap<String, (FileIdentityV1, Digest)> = previous
+    let observed: BTreeMap<String, (FileIdentityV1, Digest)> = previous
         .and_then(|generation| {
             let head = malm_store::state_generation_digest_v1(generation);
             engine
@@ -509,7 +537,7 @@ fn reconcile_local_modifications(
                 .observed_identities_v1(generation.namespace(), &head)
         })
         .unwrap_or_default();
-    let disk_digests: std::collections::BTreeMap<(DeploymentName, String), (Digest, u64)> = {
+    let disk_digests: BTreeMap<(DeploymentName, String), (Digest, u64)> = {
         let compute =
             |key: &(DeploymentName, String)| -> Option<((DeploymentName, String), (Digest, u64))> {
                 let root = engine.config.target_authorities.get(&key.0)?;
@@ -832,7 +860,7 @@ fn desired_snapshot_from_request(
     let artifacts = artifacts
         .iter()
         .map(|artifact| (artifact.id(), artifact))
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let previous_targets = previous.map(StateGenerationV1::targets).unwrap_or_default();
     let mut declared = Vec::new();
     for operation in request.operations().iter().chain(synthesized_directories) {
@@ -924,7 +952,7 @@ fn complete_reconciliation_operations(
     let artifacts = artifacts
         .iter()
         .map(|artifact| ((artifact.digest(), artifact.byte_len()), artifact.id()))
-        .collect::<std::collections::BTreeMap<_, _>>();
+        .collect::<BTreeMap<_, _>>();
     let mut operations = Vec::with_capacity(required.len());
     for mutation in required {
         let operation = match mutation {
@@ -2147,16 +2175,66 @@ fn previously_owned_target(
         .is_ok_and(|index| generation.desired_snapshot().targets()[index].is_present())
 }
 
+enum OperationObservation {
+    Ready(PreparedOperationV1),
+    BlockedDirectory(PathBuf),
+}
+
+/// Finds ensured directories that are structural containers for another exact
+/// operation under the same authority. Slash positions preserve path-component
+/// ancestry rather than treating lexical prefixes as descendants.
+fn structural_ensure_directories(
+    operations: &[PrepareOperationV1],
+) -> BTreeMap<DeploymentName, BTreeSet<String>> {
+    let mut ensured = BTreeMap::<DeploymentName, BTreeSet<String>>::new();
+    for operation in operations {
+        if matches!(operation, PrepareOperationV1::EnsureDirectory { .. }) {
+            ensured
+                .entry(operation.authority().clone())
+                .or_default()
+                .insert(operation.relative_path().to_owned());
+        }
+    }
+
+    let mut structural = BTreeMap::<DeploymentName, BTreeSet<String>>::new();
+    for operation in operations {
+        let Some(paths) = ensured.get(operation.authority()) else {
+            continue;
+        };
+        for (separator, _) in operation.relative_path().match_indices('/') {
+            let prefix = &operation.relative_path()[..separator];
+            if paths.contains(prefix) {
+                structural
+                    .entry(operation.authority().clone())
+                    .or_default()
+                    .insert(prefix.to_owned());
+            }
+        }
+    }
+    structural
+}
+
 fn observe_operation(
     engine: &Engine,
     ready: &ReadyStoreRoot<'_>,
     operation: &PrepareOperationV1,
     previous: Option<&StateGenerationV1>,
-) -> Result<PreparedOperationV1, EngineError> {
-    let observation = observe_target(engine, ready, operation, previous)?;
-    Ok(match operation {
+    structural_directory: bool,
+) -> Result<OperationObservation, EngineError> {
+    let (observation, blocked_directory) = observe_target(
+        engine,
+        ready,
+        operation,
+        previous,
+        structural_directory,
+    )?;
+    if let Some(path) = blocked_directory {
+        return Ok(OperationObservation::BlockedDirectory(path));
+    }
+    Ok(OperationObservation::Ready(match operation {
         PrepareOperationV1::EnsureDirectory { mode, .. }
             if !previous_owns_target(previous, operation)
+                && structural_directory
                 && matches!(
                 observation.leaf(),
                 LeafObservationV1::Present(identity)
@@ -2212,7 +2290,7 @@ fn observe_operation(
             observation,
             state: target_state_record(engine, state)?,
         },
-    })
+    }))
 }
 
 fn observe_target(
@@ -2220,7 +2298,8 @@ fn observe_target(
     ready: &ReadyStoreRoot<'_>,
     operation: &PrepareOperationV1,
     previous: Option<&StateGenerationV1>,
-) -> Result<TargetObservationV1, EngineError> {
+    structural_directory: bool,
+) -> Result<(TargetObservationV1, Option<PathBuf>), EngineError> {
     let authority = operation.authority();
     let target_root = engine.config.target_root(authority).ok_or_else(|| {
         prepared_error(
@@ -2303,22 +2382,21 @@ fn observe_target(
             }
         }
     };
-    validate_leaf_for_operation(
-        engine,
-        operation,
-        leaf_stat.as_ref(),
-        previous_owns_target(previous, operation),
-        &absolute,
-    )?;
-    let destructive_directory_change =
-        matches!(operation, PrepareOperationV1::RemoveLeaf { .. }) || operation.replaces_existing();
+    let previously_owned = previous_owns_target(previous, operation);
+    validate_leaf_safety(engine, leaf_stat.as_ref(), &absolute)?;
     let prior_is_managed_tree = previous_target_state(previous, operation)
         .is_some_and(|state| matches!(state, StateTargetStateV1::Tree { tree: Some(_) }));
-    if leaf_stat
+    let directory_leaf = leaf_stat
         .as_ref()
-        .is_some_and(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Directory)
-    {
-        let flags = if destructive_directory_change {
+        .is_some_and(|stat| FileType::from_raw_mode(stat.st_mode) == FileType::Directory);
+    let mut blocked_directory = false;
+    if directory_leaf {
+        let inspect_occupancy = directory_occupancy_needs_probe(
+            operation,
+            previously_owned,
+            prior_is_managed_tree,
+        );
+        let flags = if inspect_occupancy {
             DIRECTORY_FLAGS | OFlags::NOFOLLOW | OFlags::NOATIME
         } else {
             ROOT_DIRECTORY_FLAGS
@@ -2329,9 +2407,7 @@ fn observe_target(
                 errno_error("open managed target directory leaf", &absolute, source)
             })?;
         reject_state_destination_directory(ready, &leaf, &absolute, &absolute)?;
-        if destructive_directory_change && !prior_is_managed_tree {
-            require_empty_target_directory(&leaf, &absolute)?;
-        }
+        let nonempty = inspect_occupancy && target_directory_is_nonempty(&leaf, &absolute)?;
         let after = fstat(&leaf).map_err(|source| {
             errno_error("reinspect managed target directory leaf", &absolute, source)
         })?;
@@ -2359,11 +2435,34 @@ fn observe_target(
                 PreparedStoreIssue::ObservationChanged,
             ));
         }
+        blocked_directory = directory_blocks_operation(
+            operation,
+            leaf_stat.as_ref().expect("directory was observed"),
+            previously_owned,
+            prior_is_managed_tree,
+            nonempty,
+            structural_directory,
+        );
+    } else {
+        validate_operation_preconditions(
+            operation,
+            leaf_stat.as_ref(),
+            previously_owned,
+            &absolute,
+        )?;
     }
     chain.ensure_bound(target_root)?;
     ready.revalidate()?;
+    if directory_leaf && !blocked_directory {
+        validate_operation_preconditions(
+            operation,
+            leaf_stat.as_ref(),
+            previously_owned,
+            &absolute,
+        )?;
+    }
 
-    TargetObservationV1::with_missing_ancestors(
+    let observation = TargetObservationV1::with_missing_ancestors(
         authority.clone(),
         operation.relative_path(),
         file_identity(&root_stat),
@@ -2376,7 +2475,8 @@ fn observe_target(
             }),
         missing_ancestors,
     )
-    .map_err(|error| invalid_record(engine, error))
+    .map_err(|error| invalid_record(engine, error))?;
+    Ok((observation, blocked_directory.then_some(absolute)))
 }
 
 fn validate_target_directory(engine: &Engine, path: &Path, stat: &Stat) -> Result<(), EngineError> {
@@ -2395,11 +2495,9 @@ fn validate_target_directory(engine: &Engine, path: &Path, stat: &Stat) -> Resul
     Ok(())
 }
 
-fn validate_leaf_for_operation(
+fn validate_leaf_safety(
     engine: &Engine,
-    operation: &PrepareOperationV1,
     leaf: Option<&Stat>,
-    previously_owned: bool,
     path: &Path,
 ) -> Result<(), EngineError> {
     let file_type = leaf.map(|stat| FileType::from_raw_mode(stat.st_mode));
@@ -2408,6 +2506,24 @@ fn validate_leaf_for_operation(
     {
         return Err(unsafe_target(path, "target leaf is owned by another user"));
     }
+    if let Some(stat) = leaf
+        && file_type != Some(FileType::Directory)
+        && stat.st_nlink != 1
+    {
+        return Err(unsafe_target(
+            path,
+            "non-directory leaf has multiple hard links",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_operation_preconditions(
+    operation: &PrepareOperationV1,
+    leaf: Option<&Stat>,
+    previously_owned: bool,
+    path: &Path,
+) -> Result<(), EngineError> {
     match operation {
         PrepareOperationV1::PlaceFile {
             replace_existing: false,
@@ -2434,16 +2550,52 @@ fn validate_leaf_for_operation(
         }
         _ => {}
     }
-    if let Some(stat) = leaf
-        && file_type != Some(FileType::Directory)
-        && stat.st_nlink != 1
-    {
-        return Err(unsafe_target(
-            path,
-            "non-directory leaf has multiple hard links",
-        ));
-    }
     Ok(())
+}
+
+fn directory_occupancy_needs_probe(
+    operation: &PrepareOperationV1,
+    previously_owned: bool,
+    prior_is_managed_tree: bool,
+) -> bool {
+    !prior_is_managed_tree
+        && previously_owned
+        && matches!(
+            operation,
+            PrepareOperationV1::EnsureDirectory { .. }
+                | PrepareOperationV1::PlaceFile { .. }
+                | PrepareOperationV1::PlaceSymlink { .. }
+                | PrepareOperationV1::PlaceTree { .. }
+                | PrepareOperationV1::RemoveLeaf { .. }
+        )
+}
+
+fn directory_blocks_operation(
+    operation: &PrepareOperationV1,
+    leaf: &Stat,
+    previously_owned: bool,
+    prior_is_managed_tree: bool,
+    nonempty: bool,
+    structural_directory: bool,
+) -> bool {
+    match operation {
+        PrepareOperationV1::EnsureDirectory { mode, .. } => {
+            let same_mode_structural = structural_directory && leaf.st_mode & 0o7777 == *mode;
+            !prior_is_managed_tree
+                && ((!previously_owned && !same_mode_structural)
+                    || (previously_owned && nonempty))
+        }
+        PrepareOperationV1::PlaceFile { .. }
+        | PrepareOperationV1::PlaceSymlink { .. }
+        | PrepareOperationV1::PlaceTree { .. } => {
+            !prior_is_managed_tree && (!previously_owned || nonempty)
+        }
+        PrepareOperationV1::RemoveLeaf { .. } => {
+            previously_owned && !prior_is_managed_tree && nonempty
+        }
+        PrepareOperationV1::AssertAbsent { .. } => true,
+        PrepareOperationV1::AssertExact { .. } => false,
+    }
 }
 
 fn previous_owns_target(
@@ -2480,44 +2632,18 @@ fn previous_target_state<'a>(
         .map(StateTargetV1::state)
 }
 
-fn require_empty_target_directory(directory: &File, path: &Path) -> Result<(), EngineError> {
-    const NAMED_ENTRIES: usize = 3;
+fn target_directory_is_nonempty(directory: &File, path: &Path) -> Result<bool, EngineError> {
     let mut entries = Dir::read_from(directory)
         .map_err(|source| errno_error("enumerate managed target directory", path, source))?;
-    let mut named = Vec::new();
-    let mut more = 0_usize;
     while let Some(entry) = entries.read() {
         let entry = entry
             .map_err(|source| errno_error("enumerate managed target directory", path, source))?;
         if matches!(entry.file_name().to_bytes(), b"." | b"..") {
             continue;
         }
-        if named.len() < NAMED_ENTRIES {
-            named.push(format!(
-                "\"{}\"",
-                entry.file_name().to_string_lossy().escape_default()
-            ));
-        } else {
-            more += 1;
-        }
+        return Ok(true);
     }
-    if named.is_empty() {
-        return Ok(());
-    }
-    named.sort_unstable();
-    let mut listed = named.join(", ");
-    if more > 0 {
-        listed.push_str(&format!(" and {more} more"));
-    }
-    Err(unsafe_target(
-        path,
-        &format!(
-            "directory is not empty and is not managed by malm (contains {listed}); \
-             move it away first (for example: mv -- {path} {path}.backup) or delete it, \
-             then re-run",
-            path = path.display()
-        ),
-    ))
+    Ok(false)
 }
 
 fn reject_state_traversal_directory(

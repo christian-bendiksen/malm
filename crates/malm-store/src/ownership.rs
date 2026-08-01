@@ -937,7 +937,11 @@ fn validate_required_operation(
         (
             RequiredTargetMutationV1::EnsureDirectory { mode: required, .. },
             PreparedOperationV1::EnsureDirectory { mode, .. },
-        ) => mode == required && observation_matches_before,
+        ) => {
+            // An occupied managed directory may be removed after prepare
+            // reports it, then recreated by the same required mutation.
+            mode == required && (!observed_present || observation_matches_before)
+        }
         (
             RequiredTargetMutationV1::EnsureDirectory { mode: required, .. },
             PreparedOperationV1::AssertExact {
